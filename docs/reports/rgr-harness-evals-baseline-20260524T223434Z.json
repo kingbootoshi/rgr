@@ -1,0 +1,202 @@
+{
+  "runId": "rgr-harness-evals-baseline-20260524T223434Z",
+  "profile": "baseline",
+  "status": "passed",
+  "startedAt": "2026-05-24T22:34:34.564Z",
+  "finishedAt": "2026-05-24T22:34:39.764Z",
+  "durationMs": 5200,
+  "options": {
+    "profile": "baseline"
+  },
+  "environment": {
+    "platform": "darwin",
+    "bunVersion": "1.3.8",
+    "gitSha": "bb5fec0",
+    "gitDirty": true
+  },
+  "researchGrounding": [
+    "Oracle result 23enr0oj: strict argv proof, protected scope closure, hash-chain heads, CI replay",
+    "docs/EVALS.md"
+  ],
+  "suites": [
+    {
+      "id": "rgr-harness",
+      "title": "RGR Production Harness Deterministic Evals",
+      "status": "passed",
+      "startedAt": "2026-05-24T22:34:34.564Z",
+      "finishedAt": "2026-05-24T22:34:39.764Z",
+      "durationMs": 5200,
+      "checks": [
+        {
+          "id": "command-proof",
+          "status": "passed",
+          "summary": "Strict mode rejects shell and non-bun argv spoofing.",
+          "metrics": {
+            "ok": true
+          },
+          "evidence": {
+            "shell": {
+              "status": 1,
+              "stdout": "",
+              "stderr": "red --strict requires argv command proof after --. Legacy --cmd is not authoritative.\n"
+            },
+            "argv": {
+              "status": 1,
+              "stdout": "",
+              "stderr": "Strict command proof v1 only supports direct `bun test` commands.\n"
+            }
+          }
+        },
+        {
+          "id": "explicit-test-handling",
+          "status": "passed",
+          "summary": "`--test` rejects production source files.",
+          "metrics": {
+            "ok": true
+          },
+          "evidence": {
+            "result": {
+              "status": 1,
+              "stdout": "",
+              "stderr": "--test must point to a root test file, not src/calc.ts\n"
+            }
+          }
+        },
+        {
+          "id": "protected-scope",
+          "status": "passed",
+          "summary": "Imported helpers are protected before Green.",
+          "metrics": {
+            "ok": true
+          },
+          "evidence": {
+            "red": {
+              "status": 0,
+              "stdout": "Red captured: cycle 001\nProtected files: package.json, src/calc.test.ts, src/test-utils/make-calc.ts\nFailure kind: assertion\n",
+              "stderr": ""
+            },
+            "green": {
+              "status": 1,
+              "stdout": "",
+              "stderr": "Protected Red test files changed. RGR cannot prove Green against the same Red test.\n- cycle 001: src/test-utils/make-calc.ts expected 6f6c120d168b2ff9069009563fa3a51956f86942bee6429852f5b1948a7cbc02, actual ee9b257ce4d6f95e7609c349d90da60b6eb541033d9f1fd1bf243a9cf933710c\nIf the test was wrong, run rgr revise-test --reason \"<why>\" and capture a new Red proof.\n"
+            }
+          }
+        },
+        {
+          "id": "green-command-lock-and-legacy-boundary",
+          "status": "passed",
+          "summary": "Strict Green locks command and strict replay rejects legacy receipts.",
+          "metrics": {
+            "ok": true
+          },
+          "evidence": {
+            "red": {
+              "status": 0,
+              "stdout": "Red captured: cycle 001\nProtected files: package.json, src/calc.test.ts\nFailure kind: assertion\n",
+              "stderr": ""
+            },
+            "changedGreen": {
+              "status": 1,
+              "stdout": "",
+              "stderr": "Strict Green must run the exact Red command. Use Refactor/Verify for broader commands.\n"
+            },
+            "legacyRed": {
+              "status": 0,
+              "stdout": "Red captured: cycle 001\nProtected files: src/calc.test.ts\nFailure kind: assertion\n",
+              "stderr": ""
+            },
+            "legacyGreen": {
+              "status": 0,
+              "stdout": "Green proved: cycle 001\n",
+              "stderr": ""
+            },
+            "replay": {
+              "status": 1,
+              "stdout": "",
+              "stderr": "Cycle 001 has a legacy Red receipt; strict CI replay cannot trust it.\n"
+            }
+          }
+        },
+        {
+          "id": "multi-cycle-hash-chain",
+          "status": "passed",
+          "summary": "Same-file multi-cycle proof passes strict replay.",
+          "metrics": {
+            "ok": true
+          },
+          "evidence": {
+            "red1": {
+              "status": 0,
+              "stdout": "Red captured: cycle 001\nProtected files: package.json, src/calc.test.ts\nFailure kind: assertion\n",
+              "stderr": ""
+            },
+            "green1": {
+              "status": 0,
+              "stdout": "Green proved: cycle 001\n",
+              "stderr": ""
+            },
+            "red2": {
+              "status": 0,
+              "stdout": "Red captured: cycle 002\nProtected files: package.json, src/calc.test.ts\nFailure kind: assertion\n",
+              "stderr": ""
+            },
+            "green2": {
+              "status": 0,
+              "stdout": "Green proved: cycle 002\n",
+              "stderr": ""
+            },
+            "verify": {
+              "status": 0,
+              "stdout": "RGR CI verification passed.\n",
+              "stderr": ""
+            }
+          }
+        },
+        {
+          "id": "red-self-mutation",
+          "status": "passed",
+          "summary": "Red command cannot mutate protected tests.",
+          "metrics": {
+            "ok": true
+          },
+          "evidence": {
+            "red": {
+              "status": 1,
+              "stdout": "",
+              "stderr": "Protected files changed while the Red command ran:\n- src/mutating.test.ts\n"
+            }
+          }
+        },
+        {
+          "id": "quality-inspection",
+          "status": "passed",
+          "summary": "Weak tests produce deterministic inspection warnings.",
+          "metrics": {
+            "ok": true
+          },
+          "evidence": {
+            "red": {
+              "status": 0,
+              "stdout": "Red captured: cycle 001\nProtected files: package.json, src/weak.test.ts\nFailure kind: assertion\n",
+              "stderr": ""
+            },
+            "inspect": {
+              "status": 0,
+              "stdout": "{\n  \"cycleId\": \"001\",\n  \"files\": [\n    \"src/weak.test.ts\"\n  ],\n  \"warnings\": [\n    {\n      \"file\": \"src/weak.test.ts\",\n      \"kind\": \"test-only\",\n      \"message\": \"Focused .only test is present.\"\n    },\n    {\n      \"file\": \"src/weak.test.ts\",\n      \"kind\": \"weak-assertion\",\n      \"message\": \"Weak truthy/defined assertion found.\"\n    }\n  ]\n}\n",
+              "stderr": ""
+            }
+          }
+        }
+      ],
+      "metrics": {
+        "checks": 7,
+        "passed": 7,
+        "failed": 0
+      },
+      "notes": [
+        "Tier 1 deterministic suite; no model judge.",
+        "Each check creates a fresh git repository and runs the real local RGR CLI."
+      ]
+    }
+  ]
+}

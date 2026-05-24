@@ -1,25 +1,30 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { classifyFailure } from "./classify";
+import { buildCommandProof, commandDisplay, runCommandProof } from "./command-proof";
 import { fail } from "./errors";
-import { changedFiles, diffForPaths, requireGitRepo } from "./git";
-import { sha256Text } from "./hash";
+import { changedFiles, currentCommit, currentTree, diffForPaths, materializeCommit, requireGitRepo } from "./git";
+import { sha256File, sha256Text } from "./hash";
 import {
   activeRedCycle,
   appendEvent,
   ensureManifest,
   latestGreenCycle,
   nextCycleId,
+  previousProtectedHeads,
+  protectedHeads,
   requireManifest,
+  replayReceiptFor,
   saveManifest,
   snapshotProtectedFiles,
-  verifyProtectedFiles
+  verifyProtectedHeads
 } from "./manifest";
-import { ensureRgrDirs, evidenceDir, normalizeRepoPath, relativeFromRoot, resolveRoot } from "./paths";
-import { runBinary, runShellCommand } from "./process";
-import { isTestSurface } from "./test-surface";
-import type { CliOptions, CommandReceipt, Cycle, Manifest } from "./types";
+import { ensureRgrDirs, normalizeRepoPath, repoAbsolute, resolveRoot } from "./paths";
+import { runBinary } from "./process";
+import { collectProtectedScope, changedSourceFiles, toSnapshotInputs } from "./protect";
+import type { CliOptions, CommandProof, CommandReceipt, Cycle, InspectionWarning, Manifest } from "./types";
 
 export function initCommand(options: CliOptions): string {
   const root = resolveRoot(options.root);
@@ -29,32 +34,33 @@ export function initCommand(options: CliOptions): string {
 
 export function redCommand(options: CliOptions): string {
   const root = resolveRoot(options.root);
-  const command = requireCommand(options);
+  const command = buildCommandProof(root, options, "red");
   const manifest = ensureManifest(root, options.goalId, options.ledger);
 
   if (activeRedCycle(manifest)) {
     fail("An active Red cycle already exists. Run rgr green, or run rgr revise-test before replacing the test.");
   }
 
-  const changed = changedFiles(root);
-  const explicit = new Set(options.tests.map((file) => normalizeRepoPath(root, file)));
-  const protectedCandidates = new Map<string, "explicit" | "test-surface">();
-
-  for (const file of explicit) {
-    protectedCandidates.set(file, "explicit");
-  }
-  for (const file of changed) {
-    if (isTestSurface(file)) {
-      protectedCandidates.set(file, explicit.has(file) ? "explicit" : "test-surface");
+  const changedBefore = changedFiles(root);
+  const protectedCandidates = collectProtectedScope(root, options, command, changedBefore);
+  const protectedPaths = new Set(protectedCandidates.map((candidate) => candidate.path));
+  if (options.strict && options.tests.length > 0) {
+    const missingFromCommand = options.tests.map((test) => normalizeRepoPath(root, test)).filter((test) => !command.testFiles.includes(test));
+    if (missingFromCommand.length > 0) {
+      fail(["Strict Red command must select every explicit --test path:", ...missingFromCommand.map((file) => `- ${file}`)].join("\n"));
     }
   }
-
-  const protectedFiles = [...protectedCandidates.entries()].map(([filePath, kind]) => ({ path: filePath, kind }));
-  if (protectedFiles.length === 0 && !options.allowNoTests) {
-    fail("Red requires at least one changed test-surface file or explicit --test path.");
+  const headCheck = verifyProtectedHeads(root, manifest);
+  const unauthorizedHeadDrift = headCheck.mismatches.filter((mismatch) => !protectedPaths.has(mismatch.path));
+  if (unauthorizedHeadDrift.length > 0) {
+    fail([
+      "Existing protected files changed outside a new Red proof:",
+      ...unauthorizedHeadDrift.map((mismatch) => `- cycle ${mismatch.cycleId}: ${mismatch.path}`),
+      "Include the changed test file in a new Red cycle or run revise-test if the old Red was wrong."
+    ].join("\n"));
   }
 
-  const sourceChanges = changed.filter((file) => !isTestSurface(file) && !explicit.has(file));
+  const sourceChanges = changedSourceFiles(changedBefore, protectedPaths);
   if (sourceChanges.length > 0 && !options.allowSourceChanges) {
     fail(
       [
@@ -66,7 +72,18 @@ export function redCommand(options: CliOptions): string {
     );
   }
 
-  const result = runShellCommand(root, command);
+  const beforeHashes = hashProtected(root, protectedCandidates.map((candidate) => candidate.path));
+  const result = runCommandProof(root, command);
+  const changedAfter = changedFiles(root);
+  const protectedMutation = changedProtectedHashes(root, beforeHashes);
+  if (protectedMutation.length > 0) {
+    fail(["Protected files changed while the Red command ran:", ...protectedMutation.map((file) => `- ${file}`)].join("\n"));
+  }
+  const sourceChangesAfter = changedSourceFiles(changedAfter, protectedPaths);
+  if (sourceChangesAfter.length > 0 && !options.allowSourceChanges) {
+    fail(["Red command created or modified source files:", ...sourceChangesAfter.map((file) => `- ${file}`)].join("\n"));
+  }
+
   if (result.exitCode === 0) {
     fail("Red command passed. Write a failing test first, then run rgr red again.");
   }
@@ -77,19 +94,63 @@ export function redCommand(options: CliOptions): string {
   }
 
   const cycleId = nextCycleId(manifest);
+  const snapshotInputs = toSnapshotInputs(protectedCandidates, previousProtectedHeads(manifest));
+  const protectedFiles = snapshotProtectedFiles(root, cycleId, snapshotInputs);
   const evidence = writeRedEvidence(root, cycleId, result.output, diffForPaths(root, protectedFiles.map((file) => file.path)));
   const cycle: Cycle = {
     id: cycleId,
+    ordinal: manifest.cycles.length + 1,
     status: "red",
+    base: {
+      commit: currentCommit(root),
+      tree: currentTree(root),
+      capturedAt: new Date().toISOString(),
+      sourceCleanAtRed: sourceChanges.length === 0,
+      changedBeforeRed: changedBefore,
+      changedAfterRed: changedAfter
+    },
     red: {
       command,
       exitCode: result.exitCode,
+      signal: result.signal,
       startedAt: result.startedAt,
       completedAt: result.completedAt,
-      protectedFiles: snapshotProtectedFiles(root, cycleId, protectedFiles),
-      changedFiles: changed,
+      protectedFiles,
+      changedFiles: changedBefore,
       evidence,
       failure,
+      replay: {
+        strategy: "overlay-snapshots-on-git-base",
+        baseCommit: currentCommit(root),
+        baseTree: currentTree(root),
+        files: protectedFiles.map((file) => ({
+          path: file.path,
+          sha256: file.sha256,
+          snapshotPath: file.snapshotPath,
+          role: file.role ?? "root-test"
+        })),
+        overlaySha256: sha256Text(JSON.stringify(protectedFiles.map((file) => ({
+          path: file.path,
+          sha256: file.sha256,
+          snapshotPath: file.snapshotPath,
+          role: file.role ?? "root-test"
+        })).sort((a, b) => a.path.localeCompare(b.path))))
+      },
+      checks: {
+        explicitTestsSatisfied: options.tests.every((test) => protectedPaths.has(normalizeRepoPath(root, test))),
+        commandCoveredExplicitTests: command.testFiles.length === 0 || options.tests.every((test) => command.testFiles.includes(normalizeRepoPath(root, test))),
+        commandWasStrict: command.proofLevel === "strict",
+        sourceCleanBeforeRed: sourceChanges.length === 0,
+        sourceCleanAfterRed: sourceChangesAfter.length === 0,
+        protectedUnchangedDuringCommand: protectedMutation.length === 0,
+        failureLookedBehavioral: failure.likelyRightReason
+      },
+      allowances: {
+        allowSourceChanges: options.allowSourceChanges,
+        allowNoTests: options.allowNoTests,
+        allowCommandChange: options.allowCommandChange,
+        allowLegacyShell: options.allowLegacyShell
+      },
       allowSourceChanges: options.allowSourceChanges,
       allowNoTests: options.allowNoTests
     },
@@ -100,7 +161,7 @@ export function redCommand(options: CliOptions): string {
   saveManifest(root, manifest);
   appendEvent(root, manifest, "red", {
     cycleId,
-    command,
+    command: commandDisplay(command),
     exitCode: result.exitCode,
     protectedFiles: cycle.red.protectedFiles.map((file) => file.path),
     failure
@@ -117,15 +178,20 @@ export function greenCommand(options: CliOptions): string {
   const root = resolveRoot(options.root);
   const manifest = requireManifest(root);
   const cycle = selectOpenCycle(manifest, options.cycle);
-  const command = options.cmd ?? cycle.red.command;
+  if ((options.cmd || options.cmdArgv) && isStrictCycle(cycle) && !options.allowCommandChange) {
+    fail("Strict Green must run the exact Red command. Use Refactor/Verify for broader commands.");
+  }
+  const command = options.cmd || options.cmdArgv
+    ? buildCommandProof(root, options, "green")
+    : ensureCommandProof(cycle.red.command);
 
   assertProtectedUnchanged(root, manifest, (candidate) => candidate.id === cycle.id);
 
-  const receipt = runPassingReceipt(root, cycle.id, "green", command);
+  const receipt = runPassingReceipt(root, cycle.id, "green", command, "green", manifest);
   cycle.green = receipt;
   cycle.status = "green";
   saveManifest(root, manifest);
-  appendEvent(root, manifest, "green", { cycleId: cycle.id, command, exitCode: receipt.exitCode });
+  appendEvent(root, manifest, "green", { cycleId: cycle.id, command: commandDisplay(command), exitCode: receipt.exitCode });
 
   return `Green proved: cycle ${cycle.id}`;
 }
@@ -138,14 +204,16 @@ export function refactorCommand(options: CliOptions): string {
     fail("No Green cycle found. Prove Green before refactoring.");
   }
 
-  const command = options.cmd ?? cycle.green?.command ?? cycle.red.command;
+  const command = options.cmd || options.cmdArgv
+    ? buildCommandProof(root, options, "refactor")
+    : ensureCommandProof(cycle.green?.command ?? cycle.red.command);
   assertProtectedUnchanged(root, manifest);
 
-  const receipt = runPassingReceipt(root, cycle.id, `refactor-${cycle.refactors.length + 1}`, command);
+  const receipt = runPassingReceipt(root, cycle.id, `refactor-${cycle.refactors.length + 1}`, command, "refactor", manifest);
   cycle.refactors.push(receipt);
   cycle.status = "refactor";
   saveManifest(root, manifest);
-  appendEvent(root, manifest, "refactor", { cycleId: cycle.id, command, exitCode: receipt.exitCode });
+  appendEvent(root, manifest, "refactor", { cycleId: cycle.id, command: commandDisplay(command), exitCode: receipt.exitCode });
 
   return `Refactor verified: cycle ${cycle.id}`;
 }
@@ -187,11 +255,20 @@ export function verifyCommand(options: CliOptions): string {
     }
   }
 
-  if (options.cmd) {
-    const result = runShellCommand(root, options.cmd);
+  if (options.ci && options.replay) {
+    verifyReplay(root, manifest);
+  }
+
+  if (options.replay && options.cmd && !options.allowLegacyShell) {
+    fail("verify --replay requires argv command proof after --. Legacy --cmd is not authoritative.");
+  }
+
+  if (options.cmd || options.cmdArgv) {
+    const command = buildCommandProof(root, options, "verify");
+    const result = runCommandProof(root, command);
     const evidencePath = writeCommandEvidence(root, "verify", result.output);
     appendEvent(root, manifest, "verify-command", {
-      command: options.cmd,
+      command: commandDisplay(command),
       exitCode: result.exitCode,
       evidencePath
     });
@@ -200,7 +277,7 @@ export function verifyCommand(options: CliOptions): string {
     }
   }
 
-  appendEvent(root, manifest, "verify", { ci: options.ci, command: options.cmd ?? null });
+  appendEvent(root, manifest, "verify", { ci: options.ci, replay: options.replay, command: options.cmdArgv?.join(" ") ?? options.cmd ?? null });
   return options.ci ? "RGR CI verification passed." : "RGR verification passed.";
 }
 
@@ -209,7 +286,7 @@ export function statusCommand(options: CliOptions): string {
   const manifest = requireManifest(root);
   const activeCycles = manifest.cycles.filter((cycle) => !cycle.superseded);
   const open = activeCycles.filter((cycle) => !cycle.green);
-  const verified = verifyProtectedFiles(root, manifest);
+  const verified = verifyProtectedHeads(root, manifest);
 
   if (options.json) {
     return JSON.stringify(
@@ -232,7 +309,7 @@ export function statusCommand(options: CliOptions): string {
     `Base commit: ${manifest.baseCommit ?? "none"}`,
     `Cycles: ${manifest.cycles.length} total, ${activeCycles.length} active`,
     `Open Red cycles: ${open.length === 0 ? "none" : open.map((cycle) => cycle.id).join(", ")}`,
-    `Protected tests: ${verified.ok ? "unchanged" : "changed"}`
+    `Protected heads: ${verified.ok ? "unchanged" : "changed"}`
   ].join("\n");
 }
 
@@ -248,8 +325,47 @@ export function doctorCommand(options: CliOptions): string {
 
   const manifest = existsSync(path.join(root, ".rgr", "manifest.json"));
   lines.push(`manifest: ${manifest ? "present" : "not initialized"}`);
+  if (manifest) {
+    const loaded = requireManifest(root);
+    const verified = verifyProtectedHeads(root, loaded);
+    lines.push(`protected-heads: ${verified.ok ? "ok" : "changed"}`);
+    lines.push(`manifest-version: ${loaded.version}`);
+  }
 
   return lines.join("\n");
+}
+
+export function inspectTestCommand(options: CliOptions): string {
+  const root = resolveRoot(options.root);
+  const manifest = requireManifest(root);
+  const cycle = options.cycle
+    ? manifest.cycles.find((candidate) => candidate.id === options.cycle)
+    : manifest.cycles.findLast((candidate) => !candidate.superseded);
+  if (!cycle) {
+    fail("No cycle found to inspect.");
+  }
+  const files = cycle.red.protectedFiles.filter((file) => (file.role ?? "root-test") === "root-test").map((file) => file.path);
+  const warnings = inspectFiles(root, files);
+  const evidencePath = `.rgr/evidence/${cycle.id}-inspect.json`;
+  writeFileSync(path.join(root, evidencePath), `${JSON.stringify({ cycleId: cycle.id, files, warnings }, null, 2)}\n`);
+  cycle.inspection = {
+    at: new Date().toISOString(),
+    cycleId: cycle.id,
+    files,
+    warnings,
+    evidencePath
+  };
+  saveManifest(root, manifest);
+  appendEvent(root, manifest, "inspect-test", { cycleId: cycle.id, warnings: warnings.length, evidencePath });
+  if (options.strictInspect && warnings.length > 0) {
+    fail(`inspect-test found ${warnings.length} warning(s). Evidence: ${evidencePath}`);
+  }
+  if (options.json) {
+    return JSON.stringify({ cycleId: cycle.id, files, warnings }, null, 2);
+  }
+  return warnings.length === 0
+    ? `Inspection passed: cycle ${cycle.id}`
+    : [`Inspection warnings: ${warnings.length}`, ...warnings.map((warning) => `- ${warning.file}: ${warning.kind} - ${warning.message}`)].join("\n");
 }
 
 export function promptCommand(): string {
@@ -261,11 +377,11 @@ export function promptCommand(): string {
     "Work loop:",
     "1. Inspect the public contract and choose the narrowest behavior that proves the requested change.",
     "2. Write or update only the test-surface file for that behavior.",
-    "3. Run `rgr red --goal-id <goal> --cmd \"<focused test command>\"` and keep the evidence.",
+    "3. Run `rgr red --strict --goal-id <goal> --test <test-file> -- bun test <test-file>` and keep the evidence.",
     "4. Edit production code only after Red is captured.",
-    "5. Run `rgr green --cmd \"<same focused test command>\"`.",
-    "6. Refactor only after Green, then run `rgr refactor --cmd \"<broader validation>\"`.",
-    "7. Before handoff, run `rgr verify --ci --cmd \"<full validation>\"`.",
+    "5. Run `rgr green`; strict Green uses the exact Red command.",
+    "6. Refactor only after Green, then run `rgr refactor -- bun test`.",
+    "7. Before handoff, run `rgr verify --ci --replay -- bun test`.",
     "",
     "Good test discipline:",
     "- Exercise the real public contract, not copied implementation details.",
@@ -274,15 +390,8 @@ export function promptCommand(): string {
     "- Avoid mock-echo tests, result.ok-only checks, and snapshots with unnamed behavior.",
     "- If the Red test is wrong, run `rgr revise-test --reason \"<why>\"`, then capture a new Red proof.",
     "",
-    "Stop condition: Green, Refactor, and Verify pass while all protected Red tests remain byte-for-byte unchanged."
+    "Stop condition: each Red-Green proof window passes, current protected heads are unchanged, and strict CI replay proves Red on base plus Green/final validation on the final tree."
   ].join("\n");
-}
-
-function requireCommand(options: CliOptions): string {
-  if (!options.cmd?.trim()) {
-    fail("Missing --cmd \"<test command>\".");
-  }
-  return options.cmd.trim();
 }
 
 function selectOpenCycle(manifest: Manifest, cycleId?: string): Cycle {
@@ -305,7 +414,7 @@ function selectOpenCycle(manifest: Manifest, cycleId?: string): Cycle {
 }
 
 function assertProtectedUnchanged(root: string, manifest: Manifest, cycleFilter?: (cycle: Cycle) => boolean): void {
-  const verified = verifyProtectedFiles(root, manifest, cycleFilter);
+  const verified = verifyProtectedHeads(root, manifest, cycleFilter);
   if (verified.ok) {
     return;
   }
@@ -322,16 +431,19 @@ function assertProtectedUnchanged(root: string, manifest: Manifest, cycleFilter?
   );
 }
 
-function runPassingReceipt(root: string, cycleId: string, label: string, command: string): CommandReceipt {
-  const result = runShellCommand(root, command);
+function runPassingReceipt(root: string, cycleId: string, label: string, command: CommandProof, phase: "green" | "refactor" | "verify", manifest: Manifest): CommandReceipt {
+  const result = runCommandProof(root, command);
   const evidencePath = writeCommandEvidence(root, `${cycleId}-${label}`, result.output);
   const receipt: CommandReceipt = {
+    phase,
     command,
     exitCode: result.exitCode,
+    signal: result.signal,
     startedAt: result.startedAt,
     completedAt: result.completedAt,
     evidencePath,
-    outputSha256: sha256Text(result.output)
+    outputSha256: sha256Text(result.output),
+    protectedHeads: [...protectedHeads(manifest).values()]
   };
 
   if (result.exitCode !== 0) {
@@ -339,6 +451,128 @@ function runPassingReceipt(root: string, cycleId: string, label: string, command
   }
 
   return receipt;
+}
+
+function ensureCommandProof(command: string | CommandProof): CommandProof {
+  if (typeof command !== "string") {
+    return command;
+  }
+  return {
+    mode: "shell",
+    shellCommand: command,
+    canonical: command,
+    sha256: sha256Text(command),
+    proofLevel: "legacy",
+    runner: "unknown-shell",
+    cwd: ".",
+    selectors: [],
+    testFiles: [],
+    warnings: ["Legacy shell command from an old manifest."]
+  };
+}
+
+function isStrictCycle(cycle: Cycle): boolean {
+  return ensureCommandProof(cycle.red.command).proofLevel === "strict";
+}
+
+function hashProtected(root: string, paths: string[]): Map<string, string> {
+  const hashes = new Map<string, string>();
+  for (const repoPath of paths) {
+    const absolute = repoAbsolute(root, repoPath);
+    if (!existsSync(absolute)) {
+      fail(`Protected file does not exist: ${repoPath}`);
+    }
+    hashes.set(repoPath, sha256File(absolute));
+  }
+  return hashes;
+}
+
+function changedProtectedHashes(root: string, before: Map<string, string>): string[] {
+  const changed: string[] = [];
+  for (const [repoPath, previous] of before.entries()) {
+    const absolute = repoAbsolute(root, repoPath);
+    if (!existsSync(absolute)) {
+      changed.push(repoPath);
+      continue;
+    }
+    const actual = sha256File(absolute);
+    if (actual !== previous) {
+      changed.push(repoPath);
+    }
+  }
+  return changed;
+}
+
+function verifyReplay(root: string, manifest: Manifest): void {
+  const active = manifest.cycles.filter((cycle) => !cycle.superseded);
+  for (const cycle of active) {
+    const redCommand = ensureCommandProof(cycle.red.command);
+    if (redCommand.proofLevel !== "strict") {
+      fail(`Cycle ${cycle.id} has a legacy Red receipt; strict CI replay cannot trust it.`);
+    }
+    if (!cycle.green) {
+      fail(`Cycle ${cycle.id} has no Green receipt.`);
+    }
+    const replay = cycle.red.replay ?? replayReceiptFor(manifest, cycle);
+    if (!replay.baseCommit) {
+      fail(`Cycle ${cycle.id} has no replay base commit.`);
+    }
+
+    const replayRoot = mkdtempSync(path.join(tmpdir(), `rgr-replay-${cycle.id}-`));
+    try {
+      materializeCommit(root, replay.baseCommit, replayRoot);
+      for (const file of replay.files) {
+        const snapshot = repoAbsolute(root, file.snapshotPath);
+        const destination = path.join(replayRoot, file.path);
+        mkdirSync(path.dirname(destination), { recursive: true });
+        copyFileSync(snapshot, destination);
+      }
+      const result = runCommandProof(replayRoot, redCommand);
+      writeCommandEvidence(root, `${cycle.id}-replay-red`, result.output);
+      if (result.exitCode === 0) {
+        fail(`Replay failed: cycle ${cycle.id} Red command passed on its recorded base.`);
+      }
+      const failure = classifyFailure(result.output);
+      if (!failure.likelyRightReason) {
+        fail(`Replay failed: cycle ${cycle.id} Red failure did not look behavioral.`);
+      }
+    } finally {
+      rmSync(replayRoot, { recursive: true, force: true });
+    }
+
+    const green = ensureCommandProof(cycle.green.command);
+    const result = runCommandProof(root, green);
+    writeCommandEvidence(root, `${cycle.id}-replay-green`, result.output);
+    if (result.exitCode !== 0) {
+      fail(`Replay failed: final Green command failed for cycle ${cycle.id}.`);
+    }
+  }
+}
+
+function inspectFiles(root: string, files: string[]): InspectionWarning[] {
+  const warnings: InspectionWarning[] = [];
+  for (const file of files) {
+    const text = readFileSync(repoAbsolute(root, file), "utf8");
+    if (!/\bexpect\s*\(/.test(text)) {
+      warnings.push({ file, kind: "no-expect", message: "Test file has no expect() assertions." });
+    }
+    if (/\b(test|it|describe)\.only\s*\(/.test(text)) {
+      warnings.push({ file, kind: "test-only", message: "Focused .only test is present." });
+    }
+    if (/\b(test|it|describe)\.skip\s*\(/.test(text)) {
+      warnings.push({ file, kind: "test-skip", message: "Skipped test is present." });
+    }
+    if (/toBeTruthy\s*\(\s*\)|toBeDefined\s*\(\s*\)/.test(text)) {
+      warnings.push({ file, kind: "weak-assertion", message: "Weak truthy/defined assertion found." });
+    }
+    if (/toMatchSnapshot\s*\(/.test(text) && !/toBe\(|toEqual\(|toContain\(|toHaveLength\(|toThrow/.test(text)) {
+      warnings.push({ file, kind: "snapshot-only", message: "Snapshot assertion appears without semantic assertions." });
+    }
+    if (/\bmock\(|mockFn|createMock|vi\.mock|jest\.mock/.test(text)) {
+      warnings.push({ file, kind: "mock-echo-risk", message: "Mock usage detected; review for mock-echo behavior." });
+    }
+  }
+  return warnings;
 }
 
 function writeRedEvidence(root: string, cycleId: string, output: string, diff: string): { outputPath: string; diffPath: string } {

@@ -2,10 +2,10 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writ
 import path from "node:path";
 
 import { fail } from "./errors";
-import { currentCommit, requireGitRepo } from "./git";
-import { fileBytes, sha256File } from "./hash";
+import { currentCommit, currentTree, requireGitRepo } from "./git";
+import { fileBytes, sha256File, sha256Text } from "./hash";
 import { ensureRgrDirs, eventsPath, manifestPath, repoAbsolute, snapshotsDir } from "./paths";
-import type { Cycle, Manifest, ProtectedFile, VerifyResult } from "./types";
+import type { Cycle, Manifest, ProtectedFile, ProtectedHead, ProtectedRole, ProtectedSource, ReplayReceipt, VerifyResult } from "./types";
 
 export function loadManifest(root: string): Manifest | null {
   const filePath = manifestPath(root);
@@ -42,12 +42,21 @@ export function ensureManifest(root: string, goalId?: string, ledger?: string): 
   }
 
   const manifest: Manifest = {
-    version: 1,
+    version: 2,
     goalId,
     createdAt: new Date().toISOString(),
-    root,
+    rootHint: root,
     baseCommit: currentCommit(root),
+    baseTree: currentTree(root),
     ledger,
+    policy: {
+      commandProofRequired: true,
+      replayRequiredForCi: true,
+      protectImportClosure: true,
+      protectRunnerConfig: true,
+      requireExplicitTestsInStrictRed: true,
+      allowLegacyShellReceipts: true
+    },
     cycles: []
   };
 
@@ -79,7 +88,7 @@ export function latestGreenCycle(manifest: Manifest): Cycle | null {
     .findLast((cycle) => Boolean(cycle.green)) ?? null;
 }
 
-export function snapshotProtectedFiles(root: string, cycleId: string, files: Array<{ path: string; kind: ProtectedFile["kind"] }>): ProtectedFile[] {
+export function snapshotProtectedFiles(root: string, cycleId: string, files: Array<{ path: string; role?: ProtectedRole; source?: ProtectedSource; kind?: ProtectedFile["kind"]; previousCycleId?: string; previousSha256?: string }>): ProtectedFile[] {
   const protectedFiles: ProtectedFile[] = [];
 
   for (const file of files) {
@@ -98,7 +107,13 @@ export function snapshotProtectedFiles(root: string, cycleId: string, files: Arr
       sha256: sha256File(absolute),
       bytes: fileBytes(absolute),
       snapshotPath: snapshotRepoPath,
-      kind: file.kind
+      kind: file.kind,
+      role: file.role ?? (file.kind === "explicit" ? "root-test" : "root-test"),
+      source: file.source ?? (file.kind === "explicit" ? "explicit-test" : "changed-test-surface"),
+      baseSha256: null,
+      previousCycleId: file.previousCycleId,
+      previousSha256: file.previousSha256,
+      chainPolicy: "current-head"
     });
   }
 
@@ -137,6 +152,82 @@ export function verifyProtectedFiles(root: string, manifest: Manifest, cycleFilt
   }
 
   return { ok: mismatches.length === 0, mismatches };
+}
+
+export function protectedHeads(manifest: Manifest, cycleFilter?: (cycle: Cycle) => boolean): Map<string, ProtectedHead> {
+  const heads = new Map<string, ProtectedHead>();
+  const cycles = manifest.cycles.filter((cycle) => !cycle.superseded).filter(cycleFilter ?? (() => true));
+
+  for (const cycle of cycles) {
+    for (const file of cycle.red.protectedFiles) {
+      heads.set(file.path, {
+        path: file.path,
+        cycleId: cycle.id,
+        sha256: file.sha256,
+        role: file.role ?? "root-test"
+      });
+    }
+  }
+
+  return heads;
+}
+
+export function previousProtectedHeads(manifest: Manifest): Map<string, { cycleId: string; sha256: string }> {
+  const heads = new Map<string, { cycleId: string; sha256: string }>();
+  for (const cycle of manifest.cycles.filter((candidate) => !candidate.superseded)) {
+    for (const file of cycle.red.protectedFiles) {
+      heads.set(file.path, { cycleId: cycle.id, sha256: file.sha256 });
+    }
+  }
+  return heads;
+}
+
+export function verifyProtectedHeads(root: string, manifest: Manifest, cycleFilter?: (cycle: Cycle) => boolean): VerifyResult {
+  const mismatches: VerifyResult["mismatches"] = [];
+
+  for (const head of protectedHeads(manifest, cycleFilter).values()) {
+    const absolute = repoAbsolute(root, head.path);
+    if (!existsSync(absolute)) {
+      mismatches.push({
+        cycleId: head.cycleId,
+        path: head.path,
+        expected: head.sha256,
+        actual: null,
+        reason: "missing"
+      });
+      continue;
+    }
+
+    const actual = sha256File(absolute);
+    if (actual !== head.sha256) {
+      mismatches.push({
+        cycleId: head.cycleId,
+        path: head.path,
+        expected: head.sha256,
+        actual,
+        reason: "changed"
+      });
+    }
+  }
+
+  return { ok: mismatches.length === 0, mismatches };
+}
+
+export function replayReceiptFor(manifest: Manifest, cycle: Cycle): ReplayReceipt {
+  const files = cycle.red.protectedFiles.map((file) => ({
+    path: file.path,
+    sha256: file.sha256,
+    snapshotPath: file.snapshotPath,
+    role: file.role ?? "root-test"
+  }));
+  const overlaySha256 = sha256Text(JSON.stringify(files.slice().sort((a, b) => a.path.localeCompare(b.path))));
+  return {
+    strategy: "overlay-snapshots-on-git-base",
+    baseCommit: cycle.base?.commit ?? manifest.baseCommit,
+    baseTree: cycle.base?.tree ?? manifest.baseTree ?? null,
+    files,
+    overlaySha256
+  };
 }
 
 export function appendEvent(root: string, manifest: Manifest, type: string, payload: Record<string, unknown>): void {

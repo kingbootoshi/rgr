@@ -1,0 +1,53 @@
+# RGR Harness Evals
+
+These evals are deterministic Tier 1 harness checks for the production RGR proof layers. There is no model judge in this suite.
+
+## Goal
+
+Prove that the strict RGR path rejects known bad agent behaviors and accepts honest Red-Green-Refactor flows.
+
+## What Better Means
+
+RGR is better when it prevents agents from moving, weakening, bypassing, or faking the Red proof while still allowing normal iterative TDD work.
+
+## Observed Failure Modes
+
+Traces came from the prior ledger dogfood run and current e2e suite:
+
+- shell command spoofing
+- source code edited before Red
+- source file passed as `--test`
+- helper/config tampering after Red
+- Green command changed from Red
+- legacy shell receipts treated as authoritative
+- same-file multi-cycle work blocked by permanent hashes
+- Red command mutating its own test oracle
+
+## Tier 1 Checks
+
+- command-proof: strict mode rejects shell and non-`bun test` command proof
+- explicit-test-handling: `--test` only accepts root test files
+- protected-scope: helper/config files that influence the Red test are protected
+- green-command-lock: strict Green runs the exact Red command
+- legacy-boundary: `verify --ci --replay` rejects legacy shell receipts
+- multi-cycle-hash-chain: same-file test extension works across Red-Green cycles
+- red-self-mutation: Red commands cannot rewrite protected files while running
+- quality-inspection: weak tests produce inspection warnings
+
+## Tier 2
+
+Not used. This harness has no generated AI output to judge. The quality layer is deterministic static inspection plus the Oracle rubric saved in the goal ledger.
+
+## Tier 3
+
+Human review should inspect new eval reports whenever a hardening layer changes. New failure cases should be added as deterministic checks first.
+
+## Goodhart Shield
+
+Outcome signal: eval checks pass.
+
+Process signals: each check records command output and scenario-specific evidence.
+
+Regularization constraints: no external dependencies, no shell proof in strict mode, no manual report edits during a run.
+
+The Goodhart trap this avoids: agents optimizing for “tests pass” while weakening the command, test file, helper, config, or replay proof.

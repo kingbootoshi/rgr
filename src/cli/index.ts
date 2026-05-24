@@ -5,6 +5,7 @@ import {
   doctorCommand,
   greenCommand,
   initCommand,
+  inspectTestCommand,
   promptCommand,
   redCommand,
   refactorCommand,
@@ -46,6 +47,8 @@ function dispatch(command: string, options: ReturnType<typeof parseCli>["options
       return statusCommand(options);
     case "doctor":
       return doctorCommand(options);
+    case "inspect-test":
+      return inspectTestCommand(options);
     case "prompt":
       return promptCommand();
     default:

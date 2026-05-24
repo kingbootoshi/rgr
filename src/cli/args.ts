@@ -10,17 +10,24 @@ const COMMANDS = new Set<CommandName>([
   "verify",
   "status",
   "doctor",
+  "inspect-test",
   "prompt",
   "help"
 ]);
 
 const DEFAULT_OPTIONS: CliOptions = {
   tests: [],
+  protects: [],
   json: false,
   ci: false,
+  replay: false,
+  strict: false,
   allowSourceChanges: false,
   allowNoTests: false,
+  allowCommandChange: false,
+  allowLegacyShell: false,
   strictFailure: false,
+  strictInspect: false,
   help: false
 };
 
@@ -48,7 +55,7 @@ export function parseCli(argv: string[]): ParsedCli {
     if (arg === "--") {
       const rest = optionArgs.slice(index + 1);
       if (rest.length > 0) {
-        options.cmd = shellJoin(rest);
+        options.cmdArgv = rest;
       }
       break;
     }
@@ -66,6 +73,15 @@ export function parseCli(argv: string[]): ParsedCli {
       options.ci = true;
       continue;
     }
+    if (arg === "--replay") {
+      options.replay = true;
+      continue;
+    }
+    if (arg === "--strict") {
+      options.strict = true;
+      options.strictFailure = true;
+      continue;
+    }
     if (arg === "--allow-source-changes") {
       options.allowSourceChanges = true;
       continue;
@@ -74,8 +90,20 @@ export function parseCli(argv: string[]): ParsedCli {
       options.allowNoTests = true;
       continue;
     }
+    if (arg === "--allow-command-change") {
+      options.allowCommandChange = true;
+      continue;
+    }
+    if (arg === "--allow-legacy-shell") {
+      options.allowLegacyShell = true;
+      continue;
+    }
     if (arg === "--strict-failure") {
       options.strictFailure = true;
+      continue;
+    }
+    if (arg === "--strict-inspect") {
+      options.strictInspect = true;
       continue;
     }
 
@@ -103,8 +131,12 @@ export function parseCli(argv: string[]): ParsedCli {
       options.reason = takeValue(optionArgs, ++index, "--reason");
       continue;
     }
-    if (arg === "--test" || arg === "--protect") {
+    if (arg === "--test") {
       options.tests.push(takeValue(optionArgs, ++index, arg));
+      continue;
+    }
+    if (arg === "--protect") {
+      options.protects.push(takeValue(optionArgs, ++index, arg));
       continue;
     }
 
@@ -124,23 +156,29 @@ export function helpText(): string {
     "  rgr green [--cmd \"<focused test command>\"]",
     "  rgr refactor [--cmd \"<broader validation command>\"]",
     "  rgr revise-test --reason \"<why the old Red was wrong>\"",
-    "  rgr verify [--ci] [--cmd \"<full validation command>\"]",
+    "  rgr verify [--ci] [--replay] [--cmd \"<full validation command>\"]",
     "  rgr status [--json]",
     "  rgr doctor",
+    "  rgr inspect-test [--cycle <id>] [--json]",
     "  rgr prompt",
     "",
     "Global options:",
     "  --root <repo>              Repository root, defaults to cwd",
     "  --ledger <events.jsonl>     Optional external JSONL event ledger",
     "  --cmd <command>             Shell command to run",
-    "  --test <path>               Explicit protected test file, repeatable",
+    "  --test <path>               Explicit root test file, repeatable",
+    "  --protect <path>            Explicit helper/fixture/config to protect",
+    "  --strict                    Authoritative argv proof mode",
+    "  --replay                    Replay strict Red receipts during verify --ci",
     "  --allow-source-changes      Override Red source-change rejection",
     "  --allow-no-tests            Override Red protected-test requirement",
+    "  --allow-command-change      Allow Green command to differ from Red in legacy mode",
+    "  --allow-legacy-shell        Allow shell --cmd while --strict is set",
     "  --strict-failure            Fail Red when output looks like setup noise",
     "  --ci                        Require completed cycles during verify",
     "",
     "Shortcut:",
-    "  rgr red --goal-id my-goal -- bun test src/foo.test.ts"
+    "  rgr red --strict --goal-id my-goal --test src/foo.test.ts -- bun test src/foo.test.ts"
   ].join("\n");
 }
 
@@ -179,13 +217,4 @@ function takeValue(argv: string[], index: number, option: string): string {
     fail(`Missing value for ${option}`);
   }
   return value;
-}
-
-function shellJoin(parts: string[]): string {
-  return parts.map((part) => {
-    if (/^[A-Za-z0-9_./:=@+-]+$/.test(part)) {
-      return part;
-    }
-    return `'${part.replaceAll("'", "'\\''")}'`;
-  }).join(" ");
 }

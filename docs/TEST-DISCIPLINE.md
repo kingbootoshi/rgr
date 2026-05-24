@@ -2,6 +2,8 @@
 
 Good RGR only works when Red proves the behavior that matters.
 
+RGR proves process integrity, not semantic test quality. A frozen weak test is still weak. Use strict RGR to prove the test did not move after Red, then use this document, `rgr inspect-test`, review, and dogfood evidence to judge whether the test was worth freezing.
+
 ## Good Red Tests
 
 - Exercise the public contract that production callers rely on.
@@ -29,3 +31,16 @@ rgr red --goal-id <goal> --cmd "<focused command>"
 ```
 
 That keeps the audit trail honest while allowing the spec to improve.
+
+## Strict Harness Rule
+
+For production agent work, prefer:
+
+```bash
+rgr red --strict --goal-id <goal> --test <test-file> -- bun test <test-file>
+rgr green
+rgr refactor -- bun test
+rgr verify --ci --replay -- bun test
+```
+
+Strict mode rejects shell command proof, production files passed as `--test`, Green commands that differ from Red, protected helper/config tampering, and Red commands that rewrite their own test oracle.

@@ -41,6 +41,15 @@ rgr refactor --cmd "bun test"
 rgr verify --ci --cmd "bun test"
 ```
 
+Strict production workflow:
+
+```bash
+rgr red --strict --goal-id billing-scope --test src/billing.test.ts -- bun test src/billing.test.ts
+rgr green
+rgr refactor -- bun test
+rgr verify --ci --replay -- bun test
+```
+
 Every run writes `.rgr/manifest.json`, `.rgr/events.jsonl`, snapshots, diffs, and command output logs.
 
 ## What It Enforces
@@ -50,12 +59,25 @@ Every run writes `.rgr/manifest.json`, `.rgr/events.jsonl`, snapshots, diffs, an
 - Red records protected test files with SHA-256 hashes and snapshots.
 - Green refuses to run if any protected Red file changed.
 - Refactor and Verify refuse to pass if protected Red files changed.
+- Strict Red uses argv command proof instead of shell strings.
+- Strict Green runs the exact Red command.
+- Strict mode protects imported test helpers, fixtures, snapshots, package/test config, and lockfiles that can change what the test means.
+- `verify --ci --replay` reconstructs the Red proof from the recorded git base commit and protected snapshots.
+- Same-file multi-cycle work is supported through current protected heads: each Red hash is frozen through its Green, then a later Red can intentionally advance the file.
 - Wrong tests must be superseded through `rgr revise-test`, then replaced by a new Red proof.
 - `verify --ci` requires every active cycle to have Red and Green receipts.
 
 ## Threat Model
 
 This tool gives honest agents and CI a deterministic contract. If an agent has unrestricted write access to the same repo, it can still delete `.rgr` or bypass the CLI. Treat local use as a discipline gate and make `rgr verify --ci --cmd "<full suite>"` mandatory inside CI, sandboxes, or agent harnesses when the result must be authoritative.
+
+For authority, use strict replay:
+
+```bash
+rgr verify --ci --replay -- bun test
+```
+
+Legacy `--cmd` receipts remain useful for local discipline, but strict replay rejects them because arbitrary shell commands can fake failure or success.
 
 ## Test Discipline Prompt
 
