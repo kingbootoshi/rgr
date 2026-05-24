@@ -1,0 +1,18 @@
+{
+  "name": "@kingbootoshi/rgr",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "No-dependency Red-Green-Refactor discipline gate for coding agents.",
+  "bin": {
+    "rgr": "src/cli/index.ts"
+  },
+  "scripts": {
+    "rgr": "bun run src/cli/index.ts",
+    "test": "bun test",
+    "test:e2e": "bun test tests/e2e.test.ts",
+    "verify": "bun test tests/e2e.test.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

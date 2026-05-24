@@ -1,0 +1,5 @@
+.DS_Store
+.rgr/
+node_modules/
+coverage/
+*.log
