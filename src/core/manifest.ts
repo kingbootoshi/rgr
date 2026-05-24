@@ -54,8 +54,7 @@ export function ensureManifest(root: string, goalId?: string, ledger?: string): 
       replayRequiredForCi: true,
       protectImportClosure: true,
       protectRunnerConfig: true,
-      requireExplicitTestsInStrictRed: true,
-      allowLegacyShellReceipts: true
+      requireExplicitTestsInStrictRed: true
     },
     cycles: []
   };

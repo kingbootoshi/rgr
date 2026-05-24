@@ -3,7 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import { fail } from "./errors";
 import { sha256Text } from "./hash";
 import { normalizeRepoPath, repoAbsolute } from "./paths";
-import { runArgvCommand, runBinary, runShellCommand } from "./process";
+import { runArgvCommand, runBinary } from "./process";
 import { isRootTestFile } from "./test-surface";
 import type { CliOptions, CommandProof, CommandResult, CommandSelector } from "./types";
 
@@ -12,29 +12,15 @@ export function buildCommandProof(root: string, options: CliOptions, phase: "red
     return buildArgvCommandProof(root, options.cmdArgv);
   }
 
-  if (options.cmd?.trim()) {
-    if (options.strict && !options.allowLegacyShell) {
-      fail(`${phase} --strict requires argv command proof after --. Legacy --cmd is not authoritative.`);
-    }
-    return buildLegacyShellCommandProof(options.cmd.trim());
-  }
-
-  fail(`Missing command. Use -- bun test <file> for strict command proof.`);
+  fail(`Missing ${phase} command. Use -- bun test <file> for command proof.`);
 }
 
 export function runCommandProof(root: string, proof: CommandProof): CommandResult {
-  if (proof.mode === "argv") {
-    return runArgvCommand(root, proof.argv ?? []);
-  }
-  return runShellCommand(root, proof.shellCommand ?? "");
+  return runArgvCommand(root, proof.argv);
 }
 
-export function commandDisplay(proof: string | CommandProof): string {
-  return typeof proof === "string" ? proof : proof.canonical;
-}
-
-export function commandProofSha(proof: string | CommandProof): string {
-  return typeof proof === "string" ? sha256Text(proof) : proof.sha256;
+export function commandDisplay(proof: CommandProof): string {
+  return proof.canonical;
 }
 
 function buildArgvCommandProof(root: string, argv: string[]): CommandProof {
@@ -79,35 +65,12 @@ function buildArgvCommandProof(root: string, argv: string[]): CommandProof {
     argv,
     canonical,
     sha256: sha256Text(canonical),
-    proofLevel: "strict",
     runner: "bun-test",
     runnerVersion,
     cwd: ".",
     selectors,
     testFiles,
     warnings
-  };
-}
-
-function buildLegacyShellCommandProof(command: string): CommandProof {
-  const canonicalObject = {
-    mode: "shell",
-    shellCommand: command,
-    runner: "unknown-shell",
-    cwd: "."
-  };
-  const canonical = stableJson(canonicalObject);
-  return {
-    mode: "shell",
-    shellCommand: command,
-    canonical,
-    sha256: sha256Text(canonical),
-    proofLevel: "legacy",
-    runner: "unknown-shell",
-    cwd: ".",
-    selectors: [],
-    testFiles: [],
-    warnings: ["Legacy shell commands are discipline evidence only; strict CI replay rejects them."]
   };
 }
 

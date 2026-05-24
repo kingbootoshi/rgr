@@ -139,7 +139,7 @@ export function redCommand(options: CliOptions): string {
       checks: {
         explicitTestsSatisfied: options.tests.every((test) => protectedPaths.has(normalizeRepoPath(root, test))),
         commandCoveredExplicitTests: command.testFiles.length === 0 || options.tests.every((test) => command.testFiles.includes(normalizeRepoPath(root, test))),
-        commandWasStrict: command.proofLevel === "strict",
+        commandWasStrict: true,
         sourceCleanBeforeRed: sourceChanges.length === 0,
         sourceCleanAfterRed: sourceChangesAfter.length === 0,
         protectedUnchangedDuringCommand: protectedMutation.length === 0,
@@ -147,9 +147,7 @@ export function redCommand(options: CliOptions): string {
       },
       allowances: {
         allowSourceChanges: options.allowSourceChanges,
-        allowNoTests: options.allowNoTests,
-        allowCommandChange: options.allowCommandChange,
-        allowLegacyShell: options.allowLegacyShell
+        allowNoTests: options.allowNoTests
       },
       allowSourceChanges: options.allowSourceChanges,
       allowNoTests: options.allowNoTests
@@ -178,12 +176,10 @@ export function greenCommand(options: CliOptions): string {
   const root = resolveRoot(options.root);
   const manifest = requireManifest(root);
   const cycle = selectOpenCycle(manifest, options.cycle);
-  if ((options.cmd || options.cmdArgv) && isStrictCycle(cycle) && !options.allowCommandChange) {
-    fail("Strict Green must run the exact Red command. Use Refactor/Verify for broader commands.");
+  if (options.cmdArgv) {
+    fail("Green runs the exact Red command. Use Refactor/Verify for broader commands.");
   }
-  const command = options.cmd || options.cmdArgv
-    ? buildCommandProof(root, options, "green")
-    : ensureCommandProof(cycle.red.command);
+  const command = cycle.red.command;
 
   assertProtectedUnchanged(root, manifest, (candidate) => candidate.id === cycle.id);
 
@@ -204,9 +200,9 @@ export function refactorCommand(options: CliOptions): string {
     fail("No Green cycle found. Prove Green before refactoring.");
   }
 
-  const command = options.cmd || options.cmdArgv
+  const command = options.cmdArgv
     ? buildCommandProof(root, options, "refactor")
-    : ensureCommandProof(cycle.green?.command ?? cycle.red.command);
+    : cycle.green?.command ?? cycle.red.command;
   assertProtectedUnchanged(root, manifest);
 
   const receipt = runPassingReceipt(root, cycle.id, `refactor-${cycle.refactors.length + 1}`, command, "refactor", manifest);
@@ -259,11 +255,7 @@ export function verifyCommand(options: CliOptions): string {
     verifyReplay(root, manifest);
   }
 
-  if (options.replay && options.cmd && !options.allowLegacyShell) {
-    fail("verify --replay requires argv command proof after --. Legacy --cmd is not authoritative.");
-  }
-
-  if (options.cmd || options.cmdArgv) {
+  if (options.cmdArgv) {
     const command = buildCommandProof(root, options, "verify");
     const result = runCommandProof(root, command);
     const evidencePath = writeCommandEvidence(root, "verify", result.output);
@@ -277,7 +269,7 @@ export function verifyCommand(options: CliOptions): string {
     }
   }
 
-  appendEvent(root, manifest, "verify", { ci: options.ci, replay: options.replay, command: options.cmdArgv?.join(" ") ?? options.cmd ?? null });
+  appendEvent(root, manifest, "verify", { ci: options.ci, replay: options.replay, command: options.cmdArgv?.join(" ") ?? null });
   return options.ci ? "RGR CI verification passed." : "RGR verification passed.";
 }
 
@@ -453,28 +445,6 @@ function runPassingReceipt(root: string, cycleId: string, label: string, command
   return receipt;
 }
 
-function ensureCommandProof(command: string | CommandProof): CommandProof {
-  if (typeof command !== "string") {
-    return command;
-  }
-  return {
-    mode: "shell",
-    shellCommand: command,
-    canonical: command,
-    sha256: sha256Text(command),
-    proofLevel: "legacy",
-    runner: "unknown-shell",
-    cwd: ".",
-    selectors: [],
-    testFiles: [],
-    warnings: ["Legacy shell command from an old manifest."]
-  };
-}
-
-function isStrictCycle(cycle: Cycle): boolean {
-  return ensureCommandProof(cycle.red.command).proofLevel === "strict";
-}
-
 function hashProtected(root: string, paths: string[]): Map<string, string> {
   const hashes = new Map<string, string>();
   for (const repoPath of paths) {
@@ -506,10 +476,7 @@ function changedProtectedHashes(root: string, before: Map<string, string>): stri
 function verifyReplay(root: string, manifest: Manifest): void {
   const active = manifest.cycles.filter((cycle) => !cycle.superseded);
   for (const cycle of active) {
-    const redCommand = ensureCommandProof(cycle.red.command);
-    if (redCommand.proofLevel !== "strict") {
-      fail(`Cycle ${cycle.id} has a legacy Red receipt; strict CI replay cannot trust it.`);
-    }
+    const redCommand = cycle.red.command;
     if (!cycle.green) {
       fail(`Cycle ${cycle.id} has no Green receipt.`);
     }
@@ -540,7 +507,7 @@ function verifyReplay(root: string, manifest: Manifest): void {
       rmSync(replayRoot, { recursive: true, force: true });
     }
 
-    const green = ensureCommandProof(cycle.green.command);
+    const green = cycle.green.command;
     const result = runCommandProof(root, green);
     writeCommandEvidence(root, `${cycle.id}-replay-green`, result.output);
     if (result.exitCode !== 0) {

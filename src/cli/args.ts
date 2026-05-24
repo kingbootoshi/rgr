@@ -24,14 +24,12 @@ const DEFAULT_OPTIONS: CliOptions = {
   strict: false,
   allowSourceChanges: false,
   allowNoTests: false,
-  allowCommandChange: false,
-  allowLegacyShell: false,
   strictFailure: false,
   strictInspect: false,
   help: false
 };
 
-const VALUE_OPTIONS = new Set(["--root", "--goal-id", "--cmd", "--ledger", "--cycle", "--reason", "--test", "--protect"]);
+const VALUE_OPTIONS = new Set(["--root", "--goal-id", "--ledger", "--cycle", "--reason", "--test", "--protect"]);
 
 export function parseCli(argv: string[]): ParsedCli {
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
@@ -90,14 +88,6 @@ export function parseCli(argv: string[]): ParsedCli {
       options.allowNoTests = true;
       continue;
     }
-    if (arg === "--allow-command-change") {
-      options.allowCommandChange = true;
-      continue;
-    }
-    if (arg === "--allow-legacy-shell") {
-      options.allowLegacyShell = true;
-      continue;
-    }
     if (arg === "--strict-failure") {
       options.strictFailure = true;
       continue;
@@ -113,10 +103,6 @@ export function parseCli(argv: string[]): ParsedCli {
     }
     if (arg === "--goal-id") {
       options.goalId = takeValue(optionArgs, ++index, "--goal-id");
-      continue;
-    }
-    if (arg === "--cmd") {
-      options.cmd = takeValue(optionArgs, ++index, "--cmd");
       continue;
     }
     if (arg === "--ledger") {
@@ -152,11 +138,11 @@ export function helpText(): string {
     "",
     "Usage:",
     "  rgr init --goal-id <goal> [--root <repo>] [--ledger <events.jsonl>]",
-    "  rgr red --goal-id <goal> --cmd \"<focused test command>\" [--test <path>]",
-    "  rgr green [--cmd \"<focused test command>\"]",
-    "  rgr refactor [--cmd \"<broader validation command>\"]",
+    "  rgr red --goal-id <goal> --test <path> -- bun test <path>",
+    "  rgr green",
+    "  rgr refactor -- bun test",
     "  rgr revise-test --reason \"<why the old Red was wrong>\"",
-    "  rgr verify [--ci] [--replay] [--cmd \"<full validation command>\"]",
+    "  rgr verify [--ci] [--replay] -- bun test",
     "  rgr status [--json]",
     "  rgr doctor",
     "  rgr inspect-test [--cycle <id>] [--json]",
@@ -165,15 +151,12 @@ export function helpText(): string {
     "Global options:",
     "  --root <repo>              Repository root, defaults to cwd",
     "  --ledger <events.jsonl>     Optional external JSONL event ledger",
-    "  --cmd <command>             Shell command to run",
     "  --test <path>               Explicit root test file, repeatable",
     "  --protect <path>            Explicit helper/fixture/config to protect",
-    "  --strict                    Authoritative argv proof mode",
-    "  --replay                    Replay strict Red receipts during verify --ci",
+    "  --strict                    Require explicit test selection and cleaner Red failures",
+    "  --replay                    Replay Red receipts during verify --ci",
     "  --allow-source-changes      Override Red source-change rejection",
     "  --allow-no-tests            Override Red protected-test requirement",
-    "  --allow-command-change      Allow Green command to differ from Red in legacy mode",
-    "  --allow-legacy-shell        Allow shell --cmd while --strict is set",
     "  --strict-failure            Fail Red when output looks like setup noise",
     "  --ci                        Require completed cycles during verify",
     "",

@@ -29,33 +29,33 @@ test("captures Red, proves Green, verifies CI, and detects protected test tamper
 
   writeFileSync(path.join(fixture, "src/calc.test.ts"), testFile);
 
-  const red = runRgr(fixture, ["red", "--goal-id", "fixture-goal", "--cmd", "bun test src/calc.test.ts"]);
+  const red = runRgr(fixture, ["red", "--strict", "--goal-id", "fixture-goal", "--test", "src/calc.test.ts", "--", "bun", "test", "src/calc.test.ts"]);
   expect(red.status).toBe(0);
   expect(red.stdout).toContain("Red captured: cycle 001");
 
   writeFileSync(path.join(fixture, "src/calc.ts"), "export function add(a: number, b: number): number {\n  return a + b;\n}\n");
 
-  const green = runRgr(fixture, ["green", "--cmd", "bun test src/calc.test.ts"]);
+  const green = runRgr(fixture, ["green"]);
   expect(green.status).toBe(0);
   expect(green.stdout).toContain("Green proved: cycle 001");
 
-  const verify = runRgr(fixture, ["verify", "--ci", "--cmd", "bun test"]);
+  const verify = runRgr(fixture, ["verify", "--ci", "--", "bun", "test"]);
   expect(verify.status).toBe(0);
   expect(verify.stdout).toContain("RGR CI verification passed.");
 
   writeFileSync(path.join(fixture, "src/calc.test.ts"), testFile.replace("toBe(5)", "toBe(6)"));
-  const tampered = runRgr(fixture, ["verify", "--ci", "--cmd", "bun test"]);
+  const tampered = runRgr(fixture, ["verify", "--ci", "--", "bun", "test"]);
   expect(tampered.status).toBe(1);
   expect(tampered.stderr).toContain("Protected Red test files changed");
 
   writeFileSync(path.join(fixture, "src/calc.test.ts"), testFile);
-  const refactor = runRgr(fixture, ["refactor", "--cmd", "bun test"]);
+  const refactor = runRgr(fixture, ["refactor", "--", "bun", "test"]);
   expect(refactor.status).toBe(0);
   expect(refactor.stdout).toContain("Refactor verified: cycle 001");
 
   const manifest = JSON.parse(readFileSync(path.join(fixture, ".rgr/manifest.json"), "utf8"));
-  expect(manifest.cycles[0].red.protectedFiles[0].path).toBe("src/calc.test.ts");
-  expect(manifest.cycles[0].green.command.shellCommand).toBe("bun test src/calc.test.ts");
+  expect(manifest.cycles[0].red.protectedFiles.map((file: { path: string }) => file.path)).toContain("src/calc.test.ts");
+  expect(manifest.cycles[0].green.command.argv).toEqual(["bun", "test", "src/calc.test.ts"]);
   expect(manifest.cycles[0].refactors).toHaveLength(1);
 });
 
@@ -72,7 +72,7 @@ test("rejects Red when production code is already changed", () => {
   ].join("\n"));
   writeFileSync(path.join(fixture, "src/calc.ts"), "export function add(a: number, b: number): number {\n  return a + b;\n}\n");
 
-  const red = runRgr(fixture, ["red", "--goal-id", "source-dirty", "--cmd", "bun test src/calc.test.ts"]);
+  const red = runRgr(fixture, ["red", "--strict", "--goal-id", "source-dirty", "--test", "src/calc.test.ts", "--", "bun", "test", "src/calc.test.ts"]);
   expect(red.status).toBe(1);
   expect(red.stderr).toContain("Red must only change test-surface files");
   expect(red.stderr).toContain("src/calc.ts");
@@ -90,7 +90,7 @@ test("supersedes a wrong Red test and requires a new Red proof", () => {
     ""
   ].join("\n"));
 
-  const firstRed = runRgr(fixture, ["red", "--goal-id", "revise-flow", "--cmd", "bun test src/calc.test.ts"]);
+  const firstRed = runRgr(fixture, ["red", "--strict", "--goal-id", "revise-flow", "--test", "src/calc.test.ts", "--", "bun", "test", "src/calc.test.ts"]);
   expect(firstRed.status).toBe(0);
 
   const revise = runRgr(fixture, ["revise-test", "--reason", "first assertion described the wrong contract"]);
@@ -107,7 +107,7 @@ test("supersedes a wrong Red test and requires a new Red proof", () => {
     ""
   ].join("\n"));
 
-  const secondRed = runRgr(fixture, ["red", "--goal-id", "revise-flow", "--cmd", "bun test src/calc.test.ts"]);
+  const secondRed = runRgr(fixture, ["red", "--strict", "--goal-id", "revise-flow", "--test", "src/calc.test.ts", "--", "bun", "test", "src/calc.test.ts"]);
   expect(secondRed.status).toBe(0);
   expect(secondRed.stdout).toContain("Red captured: cycle 002");
 });
@@ -130,7 +130,7 @@ test("strict mode rejects command spoofing and source paths passed as tests", ()
 
   const shellSpoof = runRgr(fixture, ["red", "--strict", "--goal-id", "spoof", "--test", "src/calc.test.ts", "--cmd", "echo fail; exit 1"]);
   expect(shellSpoof.status).toBe(1);
-  expect(shellSpoof.stderr).toContain("requires argv command proof");
+  expect(shellSpoof.stderr).toContain("Unknown option: --cmd");
 
   const argvSpoof = runRgr(fixture, ["red", "--strict", "--goal-id", "spoof", "--test", "src/calc.test.ts", "--", "sh", "-c", "echo fail; exit 1"]);
   expect(argvSpoof.status).toBe(1);
@@ -183,7 +183,7 @@ test("strict Red protects helpers and runner config before Green", () => {
   expect(configTamper.stderr).toContain("Protected Red test files changed");
 });
 
-test("strict Green locks to the Red command and strict replay rejects legacy receipts", () => {
+test("Green locks to the Red command and shell command mode is absent", () => {
   const fixture = createFixture();
   writeFileSync(path.join(fixture, "src/calc.test.ts"), [
     "import { expect, test } from \"bun:test\";",
@@ -200,24 +200,14 @@ test("strict Green locks to the Red command and strict replay rejects legacy rec
   writeFileSync(path.join(fixture, "src/calc.ts"), "export function add(a: number, b: number): number {\n  return a + b;\n}\nexport function subtract(a: number, b: number): number {\n  return a + b;\n}\n");
   const changedGreen = runRgr(fixture, ["green", "--", "bun", "test"]);
   expect(changedGreen.status).toBe(1);
-  expect(changedGreen.stderr).toContain("Strict Green must run the exact Red command");
+  expect(changedGreen.stderr).toContain("Green runs the exact Red command");
 
   const green = runRgr(fixture, ["green"]);
   expect(green.status).toBe(0);
 
-  const legacy = createFixture();
-  writeFileSync(path.join(legacy, "src/calc.test.ts"), [
-    "import { expect, test } from \"bun:test\";",
-    "import { add } from \"./calc\";",
-    "test(\"adds\", () => expect(add(2, 3)).toBe(5));",
-    ""
-  ].join("\n"));
-  expect(runRgr(legacy, ["red", "--goal-id", "legacy", "--cmd", "bun test src/calc.test.ts"]).status).toBe(0);
-  writeFileSync(path.join(legacy, "src/calc.ts"), "export function add(a: number, b: number): number {\n  return a + b;\n}\n");
-  expect(runRgr(legacy, ["green"]).status).toBe(0);
-  const replay = runRgr(legacy, ["verify", "--ci", "--replay", "--", "bun", "test"]);
-  expect(replay.status).toBe(1);
-  expect(replay.stderr).toContain("legacy Red receipt");
+  const shellMode = runRgr(fixture, ["red", "--goal-id", "removed-shell", "--cmd", "bun test src/calc.test.ts"]);
+  expect(shellMode.status).toBe(1);
+  expect(shellMode.stderr).toContain("Unknown option: --cmd");
 });
 
 test("strict CI replay supports same-file multi-cycle hash chains", () => {

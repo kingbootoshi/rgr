@@ -27,7 +27,7 @@ When the test is wrong, do not quietly edit it during Green. Run:
 
 ```bash
 rgr revise-test --reason "the first assertion described the wrong contract"
-rgr red --goal-id <goal> --cmd "<focused command>"
+rgr red --strict --goal-id <goal> --test <test-file> -- bun test <test-file>
 ```
 
 That keeps the audit trail honest while allowing the spec to improve.

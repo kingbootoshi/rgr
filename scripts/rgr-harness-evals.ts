@@ -39,7 +39,7 @@ try {
   checks.push(checkCommandProof());
   checks.push(checkExplicitTestHandling());
   checks.push(checkProtectedScope());
-  checks.push(checkGreenCommandLockAndLegacyBoundary());
+  checks.push(checkGreenCommandLockAndShellRemoval());
   checks.push(checkMultiCycleReplay());
   checks.push(checkRedSelfMutation());
   checks.push(checkInspectionWarnings());
@@ -105,7 +105,12 @@ function checkCommandProof(): Check {
   writeAddTest(root);
   const shell = runRgr(root, ["red", "--strict", "--goal-id", "spoof", "--test", "src/calc.test.ts", "--cmd", "echo fail; exit 1"]);
   const argv = runRgr(root, ["red", "--strict", "--goal-id", "spoof", "--test", "src/calc.test.ts", "--", "sh", "-c", "echo fail; exit 1"]);
-  return resultCheck("command-proof", shell.status === 1 && argv.status === 1, "Strict mode rejects shell and non-bun argv spoofing.", { shell, argv });
+  return resultCheck(
+    "command-proof",
+    shell.status === 1 && shell.stderr.includes("Unknown option: --cmd") && argv.status === 1,
+    "RGR rejects shell command mode and non-bun argv spoofing.",
+    { shell, argv }
+  );
 }
 
 function checkExplicitTestHandling(): Check {
@@ -127,22 +132,19 @@ function checkProtectedScope(): Check {
   return resultCheck("protected-scope", red.status === 0 && green.status === 1 && green.stderr.includes("Protected Red test files changed"), "Imported helpers are protected before Green.", { red, green });
 }
 
-function checkGreenCommandLockAndLegacyBoundary(): Check {
+function checkGreenCommandLockAndShellRemoval(): Check {
   const strictRoot = createFixture();
   writeAddTest(strictRoot);
   const red = runRgr(strictRoot, ["red", "--strict", "--goal-id", "lock", "--test", "src/calc.test.ts", "--", "bun", "test", "src/calc.test.ts"]);
   writeFixedAdd(strictRoot);
   const changedGreen = runRgr(strictRoot, ["green", "--", "bun", "test"]);
-
-  const legacyRoot = createFixture();
-  writeAddTest(legacyRoot);
-  const legacyRed = runRgr(legacyRoot, ["red", "--goal-id", "legacy", "--cmd", "bun test src/calc.test.ts"]);
-  writeFixedAdd(legacyRoot);
-  const legacyGreen = runRgr(legacyRoot, ["green"]);
-  const replay = runRgr(legacyRoot, ["verify", "--ci", "--replay", "--", "bun", "test"]);
-
-  const ok = red.status === 0 && changedGreen.status === 1 && legacyRed.status === 0 && legacyGreen.status === 0 && replay.status === 1;
-  return resultCheck("green-command-lock-and-legacy-boundary", ok, "Strict Green locks command and strict replay rejects legacy receipts.", { red, changedGreen, legacyRed, legacyGreen, replay });
+  const shellMode = runRgr(strictRoot, ["red", "--goal-id", "removed-shell", "--cmd", "bun test src/calc.test.ts"]);
+  const ok = red.status === 0
+    && changedGreen.status === 1
+    && changedGreen.stderr.includes("Green runs the exact Red command")
+    && shellMode.status === 1
+    && shellMode.stderr.includes("Unknown option: --cmd");
+  return resultCheck("green-command-lock-and-shell-removal", ok, "Green locks command proof and shell command mode is absent.", { red, changedGreen, shellMode });
 }
 
 function checkMultiCycleReplay(): Check {

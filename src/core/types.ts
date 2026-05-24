@@ -14,7 +14,6 @@ export type CommandName =
 export interface CliOptions {
   root?: string;
   goalId?: string;
-  cmd?: string;
   cmdArgv?: string[];
   ledger?: string;
   cycle?: string;
@@ -27,8 +26,6 @@ export interface CliOptions {
   strict: boolean;
   allowSourceChanges: boolean;
   allowNoTests: boolean;
-  allowCommandChange: boolean;
-  allowLegacyShell: boolean;
   strictFailure: boolean;
   strictInspect: boolean;
   help: boolean;
@@ -58,7 +55,6 @@ export interface RgrPolicy {
   protectImportClosure: boolean;
   protectRunnerConfig: boolean;
   requireExplicitTestsInStrictRed: boolean;
-  allowLegacyShellReceipts: boolean;
 }
 
 export interface Cycle {
@@ -83,7 +79,7 @@ export interface GitBaseReceipt {
 }
 
 export interface RedReceipt {
-  command: string | CommandProof;
+  command: CommandProof;
   exitCode: number;
   signal?: string | null;
   startedAt: string;
@@ -101,7 +97,7 @@ export interface RedReceipt {
 
 export interface CommandReceipt {
   phase?: "green" | "refactor" | "verify";
-  command: string | CommandProof;
+  command: CommandProof;
   exitCode: number;
   signal?: string | null;
   startedAt: string;
@@ -149,13 +145,11 @@ export type ProtectedSource =
   | "snapshot-discovery";
 
 export interface CommandProof {
-  mode: "argv" | "shell";
-  argv?: string[];
-  shellCommand?: string;
+  mode: "argv";
+  argv: string[];
   canonical: string;
   sha256: string;
-  proofLevel: "strict" | "legacy";
-  runner: "bun-test" | "unknown-shell";
+  runner: "bun-test";
   runnerVersion?: string;
   cwd: ".";
   selectors: CommandSelector[];
@@ -204,8 +198,6 @@ export interface RedChecks {
 export interface RedAllowances {
   allowSourceChanges: boolean;
   allowNoTests: boolean;
-  allowCommandChange: boolean;
-  allowLegacyShell: boolean;
 }
 
 export interface EvidencePaths {
