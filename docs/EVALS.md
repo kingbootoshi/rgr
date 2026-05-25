@@ -14,22 +14,20 @@ RGR is better when it prevents agents from moving, weakening, bypassing, or faki
 
 Traces came from the prior ledger dogfood run and current e2e suite:
 
-- shell command spoofing
 - source code edited before Red
 - source file passed as `--test`
 - helper/config tampering after Red
 - Green command changed from Red
-- removed shell command interface accidentally restored
+- non-`bun test` command proof
 - same-file multi-cycle work blocked by permanent hashes
 - Red command mutating its own test oracle
 
 ## Tier 1 Checks
 
-- command-proof: RGR rejects shell command mode and non-`bun test` command proof
+- command-proof: RGR rejects non-`bun test` command proof
 - explicit-test-handling: `--test` only accepts root test files
 - protected-scope: helper/config files that influence the Red test are protected
 - green-command-lock: Green runs the exact Red command
-- shell-removal: shell command mode stays absent
 - multi-cycle-hash-chain: same-file test extension works across Red-Green cycles
 - red-self-mutation: Red commands cannot rewrite protected files while running
 - quality-inspection: weak tests produce inspection warnings

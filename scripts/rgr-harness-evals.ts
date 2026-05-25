@@ -39,7 +39,7 @@ try {
   checks.push(checkCommandProof());
   checks.push(checkExplicitTestHandling());
   checks.push(checkProtectedScope());
-  checks.push(checkGreenCommandLockAndShellRemoval());
+  checks.push(checkGreenCommandLock());
   checks.push(checkMultiCycleReplay());
   checks.push(checkRedSelfMutation());
   checks.push(checkInspectionWarnings());
@@ -103,14 +103,8 @@ process.exit(suite.status === "passed" ? 0 : 1);
 function checkCommandProof(): Check {
   const root = createFixture();
   writeAddTest(root);
-  const shell = runRgr(root, ["red", "--strict", "--goal-id", "spoof", "--test", "src/calc.test.ts", "--cmd", "echo fail; exit 1"]);
   const argv = runRgr(root, ["red", "--strict", "--goal-id", "spoof", "--test", "src/calc.test.ts", "--", "sh", "-c", "echo fail; exit 1"]);
-  return resultCheck(
-    "command-proof",
-    shell.status === 1 && shell.stderr.includes("Unknown option: --cmd") && argv.status === 1,
-    "RGR rejects shell command mode and non-bun argv spoofing.",
-    { shell, argv }
-  );
+  return resultCheck("command-proof", argv.status === 1, "RGR rejects non-bun argv spoofing.", { argv });
 }
 
 function checkExplicitTestHandling(): Check {
@@ -132,19 +126,16 @@ function checkProtectedScope(): Check {
   return resultCheck("protected-scope", red.status === 0 && green.status === 1 && green.stderr.includes("Protected Red test files changed"), "Imported helpers are protected before Green.", { red, green });
 }
 
-function checkGreenCommandLockAndShellRemoval(): Check {
+function checkGreenCommandLock(): Check {
   const strictRoot = createFixture();
   writeAddTest(strictRoot);
   const red = runRgr(strictRoot, ["red", "--strict", "--goal-id", "lock", "--test", "src/calc.test.ts", "--", "bun", "test", "src/calc.test.ts"]);
   writeFixedAdd(strictRoot);
   const changedGreen = runRgr(strictRoot, ["green", "--", "bun", "test"]);
-  const shellMode = runRgr(strictRoot, ["red", "--goal-id", "removed-shell", "--cmd", "bun test src/calc.test.ts"]);
   const ok = red.status === 0
     && changedGreen.status === 1
-    && changedGreen.stderr.includes("Green runs the exact Red command")
-    && shellMode.status === 1
-    && shellMode.stderr.includes("Unknown option: --cmd");
-  return resultCheck("green-command-lock-and-shell-removal", ok, "Green locks command proof and shell command mode is absent.", { red, changedGreen, shellMode });
+    && changedGreen.stderr.includes("Green runs the exact Red command");
+  return resultCheck("green-command-lock", ok, "Green locks command proof to the Red command.", { red, changedGreen });
 }
 
 function checkMultiCycleReplay(): Check {

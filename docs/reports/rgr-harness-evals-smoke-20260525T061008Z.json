@@ -1,17 +1,17 @@
 {
-  "runId": "rgr-harness-evals-smoke-20260524T232035Z",
+  "runId": "rgr-harness-evals-smoke-20260525T061008Z",
   "profile": "smoke",
   "status": "passed",
-  "startedAt": "2026-05-24T23:20:35.834Z",
-  "finishedAt": "2026-05-24T23:20:39.650Z",
-  "durationMs": 3816,
+  "startedAt": "2026-05-25T06:10:08.587Z",
+  "finishedAt": "2026-05-25T06:10:11.919Z",
+  "durationMs": 3332,
   "options": {
     "profile": "smoke"
   },
   "environment": {
     "platform": "darwin",
     "bunVersion": "1.3.8",
-    "gitSha": "2f0391d",
+    "gitSha": "3b050d1",
     "gitDirty": true
   },
   "researchGrounding": [
@@ -23,23 +23,18 @@
       "id": "rgr-harness",
       "title": "RGR Production Harness Deterministic Evals",
       "status": "passed",
-      "startedAt": "2026-05-24T23:20:35.834Z",
-      "finishedAt": "2026-05-24T23:20:39.650Z",
-      "durationMs": 3816,
+      "startedAt": "2026-05-25T06:10:08.587Z",
+      "finishedAt": "2026-05-25T06:10:11.919Z",
+      "durationMs": 3332,
       "checks": [
         {
           "id": "command-proof",
           "status": "passed",
-          "summary": "RGR rejects shell command mode and non-bun argv spoofing.",
+          "summary": "RGR rejects non-bun argv spoofing.",
           "metrics": {
             "ok": true
           },
           "evidence": {
-            "shell": {
-              "status": 1,
-              "stdout": "",
-              "stderr": "Unknown option: --cmd\n"
-            },
             "argv": {
               "status": 1,
               "stdout": "",
@@ -83,9 +78,9 @@
           }
         },
         {
-          "id": "green-command-lock-and-shell-removal",
+          "id": "green-command-lock",
           "status": "passed",
-          "summary": "Green locks command proof and shell command mode is absent.",
+          "summary": "Green locks command proof to the Red command.",
           "metrics": {
             "ok": true
           },
@@ -99,11 +94,6 @@
               "status": 1,
               "stdout": "",
               "stderr": "Green runs the exact Red command. Use Refactor/Verify for broader commands.\n"
-            },
-            "shellMode": {
-              "status": 1,
-              "stdout": "",
-              "stderr": "Unknown option: --cmd\n"
             }
           }
         },

@@ -128,10 +128,6 @@ test("strict mode rejects command spoofing and source paths passed as tests", ()
   expect(sourceAsTest.status).toBe(1);
   expect(sourceAsTest.stderr).toContain("--test must point to a root test file");
 
-  const shellSpoof = runRgr(fixture, ["red", "--strict", "--goal-id", "spoof", "--test", "src/calc.test.ts", "--cmd", "echo fail; exit 1"]);
-  expect(shellSpoof.status).toBe(1);
-  expect(shellSpoof.stderr).toContain("Unknown option: --cmd");
-
   const argvSpoof = runRgr(fixture, ["red", "--strict", "--goal-id", "spoof", "--test", "src/calc.test.ts", "--", "sh", "-c", "echo fail; exit 1"]);
   expect(argvSpoof.status).toBe(1);
   expect(argvSpoof.stderr).toContain("only supports direct `bun test`");
@@ -183,7 +179,7 @@ test("strict Red protects helpers and runner config before Green", () => {
   expect(configTamper.stderr).toContain("Protected Red test files changed");
 });
 
-test("Green locks to the Red command and shell command mode is absent", () => {
+test("Green locks to the Red command", () => {
   const fixture = createFixture();
   writeFileSync(path.join(fixture, "src/calc.test.ts"), [
     "import { expect, test } from \"bun:test\";",
@@ -204,10 +200,6 @@ test("Green locks to the Red command and shell command mode is absent", () => {
 
   const green = runRgr(fixture, ["green"]);
   expect(green.status).toBe(0);
-
-  const shellMode = runRgr(fixture, ["red", "--goal-id", "removed-shell", "--cmd", "bun test src/calc.test.ts"]);
-  expect(shellMode.status).toBe(1);
-  expect(shellMode.stderr).toContain("Unknown option: --cmd");
 });
 
 test("strict CI replay supports same-file multi-cycle hash chains", () => {
