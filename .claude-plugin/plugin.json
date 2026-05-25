@@ -1,0 +1,20 @@
+{
+  "name": "rgr",
+  "displayName": "RGR",
+  "version": "0.1.0",
+  "description": "Strict Red-Green-Refactor proof for coding agents.",
+  "author": {
+    "name": "bootoshi",
+    "url": "https://github.com/kingbootoshi"
+  },
+  "homepage": "https://github.com/kingbootoshi/rgr",
+  "repository": "https://github.com/kingbootoshi/rgr",
+  "keywords": [
+    "rgr",
+    "red-green-refactor",
+    "tdd",
+    "testing",
+    "coding-agents"
+  ],
+  "skills": "./skills/"
+}

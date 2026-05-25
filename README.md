@@ -35,6 +35,31 @@ bun run /path/to/rgr/src/cli/index.ts --root . --help
 
 The workflow examples below assume `rgr` is on your PATH. If it is not, replace `rgr` with `bun run /path/to/rgr/src/cli/index.ts`.
 
+## Agent Plugins
+
+RGR ships one shared skill as both a Claude Code plugin and a Codex plugin.
+
+Claude Code:
+
+```bash
+claude plugin marketplace add kingbootoshi/rgr
+claude plugin install rgr@rgr
+```
+
+For local Claude Code testing from a clone:
+
+```bash
+claude --plugin-dir .
+```
+
+Codex:
+
+- Plugin manifest: `.codex-plugin/plugin.json`
+- Shared skill: `skills/rgr/SKILL.md`
+- Codex UI metadata: `skills/rgr/agents/openai.yaml`
+
+Install the repo root as the plugin directory in Codex, then invoke `$rgr` when a code change should use strict Red-Green-Refactor proof.
+
 ## Core Workflow
 
 ```bash

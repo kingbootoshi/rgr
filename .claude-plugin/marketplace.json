@@ -1,0 +1,23 @@
+{
+  "name": "rgr",
+  "owner": {
+    "name": "bootoshi"
+  },
+  "description": "RGR plugin marketplace for strict Red-Green-Refactor agent workflows.",
+  "metadata": {
+    "description": "RGR plugin marketplace for strict Red-Green-Refactor agent workflows."
+  },
+  "plugins": [
+    {
+      "name": "rgr",
+      "source": "./",
+      "description": "Strict Red-Green-Refactor proof for coding agents.",
+      "category": "coding",
+      "tags": [
+        "tdd",
+        "testing",
+        "agents"
+      ]
+    }
+  ]
+}
