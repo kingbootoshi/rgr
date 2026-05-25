@@ -1,7 +1,6 @@
 {
   "name": "@kingbootoshi/rgr",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "No-dependency Red-Green-Refactor discipline gate for coding agents.",
   "bin": {

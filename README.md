@@ -1,13 +1,24 @@
 # RGR
 
+![RGR header](assets/rgr-header.png)
+
 `rgr` is a no-dependency Red-Green-Refactor gate for coding agents. It gives agents a human-operator style CLI that records the failing test first, freezes that test with hashes and snapshots, and refuses to mark Green or Refactor if the Red test was edited.
 
 ## Install
 
-This repo is private/local by design.
+Clone the repo and run it with Bun:
 
 ```bash
-bun run src/cli/index.ts --help
+git clone https://github.com/kingbootoshi/rgr.git
+cd rgr
+bun run rgr -- --help
+```
+
+Optional: link the CLI onto your PATH:
+
+```bash
+bun link
+rgr --help
 ```
 
 From this repo:
@@ -19,8 +30,10 @@ bun run rgr -- --help
 From another repo:
 
 ```bash
-bun run /Users/saint/Dev/rgr-cli/src/cli/index.ts --root . --help
+bun run /path/to/rgr/src/cli/index.ts --root . --help
 ```
+
+The workflow examples below assume `rgr` is on your PATH. If it is not, replace `rgr` with `bun run /path/to/rgr/src/cli/index.ts`.
 
 ## Core Workflow
 
