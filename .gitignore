@@ -1,0 +1,11 @@
+.DS_Store
+.agent/
+.rgr/
+node_modules/
+coverage/
+docs/reports/
+dist/
+tmp/
+*.log
+.env
+.env.*

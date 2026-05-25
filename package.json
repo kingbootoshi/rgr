@@ -1,0 +1,20 @@
+{
+  "name": "@kingbootoshi/rgr",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "No-dependency Red-Green-Refactor discipline gate for coding agents.",
+  "bin": {
+    "rgr": "src/cli/index.ts"
+  },
+  "scripts": {
+    "rgr": "bun run src/cli/index.ts",
+    "test": "bun test",
+    "test:e2e": "bun test tests/e2e.test.ts",
+    "verify": "bun test tests/e2e.test.ts && bun run eval:rgr-harness:smoke",
+    "eval:rgr-harness": "bun run scripts/rgr-harness-evals.ts",
+    "eval:rgr-harness:smoke": "bun run scripts/rgr-harness-evals.ts -- --profile smoke",
+    "eval:rgr-harness:baseline": "bun run scripts/rgr-harness-evals.ts -- --profile baseline"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
