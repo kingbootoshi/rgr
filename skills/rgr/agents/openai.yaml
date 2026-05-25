@@ -1,0 +1,8 @@
+interface:
+  display_name: "RGR"
+  short_description: "Strict Red-Green-Refactor proof"
+  brand_color: "#16A34A"
+  default_prompt: "Use $rgr to ship this code change through strict Red-Green-Refactor proof."
+
+policy:
+  allow_implicit_invocation: true
