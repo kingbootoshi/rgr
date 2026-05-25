@@ -43,4 +43,4 @@ rgr refactor -- bun test
 rgr verify --ci --replay -- bun test
 ```
 
-Strict mode rejects shell command proof, production files passed as `--test`, Green commands that differ from Red, protected helper/config tampering, and Red commands that rewrite their own test oracle.
+Use `--protect <support-file>` when a helper, fixture, snapshot, or test config defines the expected Red behavior. Strict mode rejects shell command proof, production/support files passed as `--test`, Green commands that differ from Red, protected helper/config tampering, and Red commands that rewrite their own test oracle.

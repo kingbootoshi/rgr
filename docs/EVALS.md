@@ -17,6 +17,8 @@ Traces came from the prior ledger dogfood run and current e2e suite:
 - source code edited before Red
 - source file passed as `--test`
 - helper/config tampering after Red
+- helper/fixture support passed incorrectly as `--test`
+- Red command generating unprotected fixture/support files
 - Green command changed from Red
 - non-`bun test` command proof
 - same-file multi-cycle work blocked by permanent hashes
@@ -26,10 +28,12 @@ Traces came from the prior ledger dogfood run and current e2e suite:
 
 - command-proof: RGR rejects non-`bun test` command proof
 - explicit-test-handling: `--test` only accepts root test files
+- explicit-protected-support: `--protect` accepts helpers/fixtures/config support without making them assertion-bearing tests
 - protected-scope: helper/config files that influence the Red test are protected
 - green-command-lock: Green runs the exact Red command
 - multi-cycle-hash-chain: same-file test extension works across Red-Green cycles
 - red-self-mutation: Red commands cannot rewrite protected files while running
+- red-generated-support: Red commands cannot create unprotected helper/fixture support while running
 - quality-inspection: weak tests produce inspection warnings
 
 ## Tier 2

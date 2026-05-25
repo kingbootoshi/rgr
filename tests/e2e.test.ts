@@ -46,7 +46,7 @@ test("captures Red, proves Green, verifies CI, and detects protected test tamper
   writeFileSync(path.join(fixture, "src/calc.test.ts"), testFile.replace("toBe(5)", "toBe(6)"));
   const tampered = runRgr(fixture, ["verify", "--ci", "--", "bun", "test"]);
   expect(tampered.status).toBe(1);
-  expect(tampered.stderr).toContain("Protected Red test files changed");
+  expect(tampered.stderr).toContain("Protected Red files changed");
 
   writeFileSync(path.join(fixture, "src/calc.test.ts"), testFile);
   const refactor = runRgr(fixture, ["refactor", "--", "bun", "test"]);
@@ -128,9 +128,89 @@ test("strict mode rejects command spoofing and source paths passed as tests", ()
   expect(sourceAsTest.status).toBe(1);
   expect(sourceAsTest.stderr).toContain("--test must point to a root test file");
 
+  mkdirSync(path.join(fixture, "tests/fixtures"), { recursive: true });
+  writeFileSync(path.join(fixture, "tests/fixtures/env.ts"), "export const expected = 5;\n");
+  const supportAsTest = runRgr(fixture, ["red", "--strict", "--goal-id", "abuse", "--test", "tests/fixtures/env.ts", "--", "bun", "test", "src/calc.test.ts"]);
+  expect(supportAsTest.status).toBe(1);
+  expect(supportAsTest.stderr).toContain("Use --protect for helpers, fixtures, snapshots, and test config");
+
   const argvSpoof = runRgr(fixture, ["red", "--strict", "--goal-id", "spoof", "--test", "src/calc.test.ts", "--", "sh", "-c", "echo fail; exit 1"]);
   expect(argvSpoof.status).toBe(1);
   expect(argvSpoof.stderr).toContain("only supports direct `bun test`");
+});
+
+test("explicit --protect accepts fixtures without treating them as root tests", () => {
+  const fixture = createFixture();
+  mkdirSync(path.join(fixture, "tests/fixtures"), { recursive: true });
+  writeFileSync(path.join(fixture, "tests/fixtures/env.ts"), "export const expectedSum = 5;\n");
+  writeFileSync(path.join(fixture, "tests/config.test.ts"), [
+    "import { expect, test } from \"bun:test\";",
+    "import { add } from \"../src/calc\";",
+    "import { expectedSum } from \"./fixtures/env\";",
+    "",
+    "test(\"uses fixture expected value\", () => {",
+    "  expect(add(2, 3)).toBe(expectedSum);",
+    "});",
+    ""
+  ].join("\n"));
+
+  const red = runRgr(fixture, ["red", "--strict", "--goal-id", "fixture-protect", "--test", "tests/config.test.ts", "--protect", "tests/fixtures/env.ts", "--", "bun", "test", "tests/config.test.ts"]);
+  expect(red.status).toBe(0);
+  expect(red.stdout).toContain("Root tests: tests/config.test.ts");
+  expect(red.stdout).toContain("Protected support:");
+  expect(red.stdout).toContain("tests/fixtures/env.ts (fixture)");
+
+  const manifest = JSON.parse(readFileSync(path.join(fixture, ".rgr/manifest.json"), "utf8"));
+  const fixtureEntry = manifest.cycles[0].red.protectedFiles.find((file: { path: string }) => file.path === "tests/fixtures/env.ts");
+  expect(fixtureEntry.role).toBe("fixture");
+  expect(manifest.cycles[0].red.command.testFiles).toEqual(["tests/config.test.ts"]);
+
+  const inspect = runRgr(fixture, ["inspect-test", "--json"]);
+  expect(inspect.status).toBe(0);
+  const inspection = JSON.parse(inspect.stdout);
+  expect(inspection.files).toEqual(["tests/config.test.ts"]);
+  expect(inspection.protectedSupport).toContainEqual(expect.objectContaining({ path: "tests/fixtures/env.ts", role: "fixture" }));
+  expect(inspection.warnings).toEqual([]);
+
+  writeFileSync(path.join(fixture, "src/calc.ts"), "export function add(a: number, b: number): number {\n  return a + b;\n}\nexport function subtract(a: number, b: number): number {\n  return a + b;\n}\n");
+  writeFileSync(path.join(fixture, "tests/fixtures/env.ts"), "export const expectedSum = 0;\n");
+  const tampered = runRgr(fixture, ["green"]);
+  expect(tampered.status).toBe(1);
+  expect(tampered.stderr).toContain("Protected Red files changed");
+  expect(tampered.stderr).toContain("tests/fixtures/env.ts");
+
+  writeFileSync(path.join(fixture, "tests/fixtures/env.ts"), "export const expectedSum = 5;\n");
+  const green = runRgr(fixture, ["green"]);
+  expect(green.status).toBe(0);
+});
+
+test("import closure follows helpers into fixtures", () => {
+  const fixture = createFixture();
+  mkdirSync(path.join(fixture, "src/test-utils"), { recursive: true });
+  mkdirSync(path.join(fixture, "tests/fixtures"), { recursive: true });
+  writeFileSync(path.join(fixture, "tests/fixtures/env.ts"), "export const expectedSum = 5;\n");
+  writeFileSync(path.join(fixture, "src/test-utils/make-calc.ts"), [
+    "import { add } from \"../calc\";",
+    "import { expectedSum } from \"../../tests/fixtures/env\";",
+    "export function runAdd(a: number, b: number): number {",
+    "  return add(a, b);",
+    "}",
+    "export { expectedSum };",
+    ""
+  ].join("\n"));
+  writeFileSync(path.join(fixture, "src/calc.test.ts"), [
+    "import { expect, test } from \"bun:test\";",
+    "import { expectedSum, runAdd } from \"./test-utils/make-calc\";",
+    "test(\"adds through helper and fixture\", () => expect(runAdd(2, 3)).toBe(expectedSum));",
+    ""
+  ].join("\n"));
+
+  const red = runRgr(fixture, ["red", "--strict", "--goal-id", "helper-fixture-closure", "--test", "src/calc.test.ts", "--", "bun", "test", "src/calc.test.ts"]);
+  expect(red.status).toBe(0);
+  const manifest = JSON.parse(readFileSync(path.join(fixture, ".rgr/manifest.json"), "utf8"));
+  const protectedFiles = manifest.cycles[0].red.protectedFiles.map((file: { path: string; role: string }) => ({ path: file.path, role: file.role }));
+  expect(protectedFiles).toContainEqual({ path: "src/test-utils/make-calc.ts", role: "test-helper" });
+  expect(protectedFiles).toContainEqual({ path: "tests/fixtures/env.ts", role: "fixture" });
 });
 
 test("strict Red protects helpers and runner config before Green", () => {
@@ -164,7 +244,7 @@ test("strict Red protects helpers and runner config before Green", () => {
   writeFileSync(path.join(fixture, "src/test-utils/make-calc.ts"), "export function runAdd(): number {\n  return 5;\n}\n");
   const helperTamper = runRgr(fixture, ["green"]);
   expect(helperTamper.status).toBe(1);
-  expect(helperTamper.stderr).toContain("Protected Red test files changed");
+  expect(helperTamper.stderr).toContain("Protected Red files changed");
 
   writeFileSync(path.join(fixture, "src/test-utils/make-calc.ts"), [
     "import { add } from \"../calc\";",
@@ -176,7 +256,7 @@ test("strict Red protects helpers and runner config before Green", () => {
   writeFileSync(path.join(fixture, "package.json"), JSON.stringify({ type: "module", scripts: { test: "bun test", fake: "true" } }, null, 2));
   const configTamper = runRgr(fixture, ["green"]);
   expect(configTamper.status).toBe(1);
-  expect(configTamper.stderr).toContain("Protected Red test files changed");
+  expect(configTamper.stderr).toContain("Protected Red files changed");
 });
 
 test("Green locks to the Red command", () => {
@@ -247,6 +327,26 @@ test("strict Red rejects commands that mutate protected tests while running", ()
   const red = runRgr(fixture, ["red", "--strict", "--goal-id", "mutating-red", "--test", "src/mutating.test.ts", "--", "bun", "test", "src/mutating.test.ts"]);
   expect(red.status).toBe(1);
   expect(red.stderr).toContain("Protected files changed while the Red command ran");
+});
+
+test("strict Red rejects commands that create unprotected test support while running", () => {
+  const fixture = createFixture();
+  mkdirSync(path.join(fixture, "tests"), { recursive: true });
+  writeFileSync(path.join(fixture, "tests/generated-support.test.ts"), [
+    "import { mkdirSync, writeFileSync } from \"node:fs\";",
+    "import { expect, test } from \"bun:test\";",
+    "test(\"creates fixture support\", () => {",
+    "  mkdirSync(new URL(\"./fixtures\", import.meta.url), { recursive: true });",
+    "  writeFileSync(new URL(\"./fixtures/generated.ts\", import.meta.url), \"export const value = 1;\\n\");",
+    "  expect(1).toBe(2);",
+    "});",
+    ""
+  ].join("\n"));
+
+  const red = runRgr(fixture, ["red", "--strict", "--goal-id", "generated-support", "--test", "tests/generated-support.test.ts", "--", "bun", "test", "tests/generated-support.test.ts"]);
+  expect(red.status).toBe(1);
+  expect(red.stderr).toContain("Red command created or modified unprotected test support");
+  expect(red.stderr).toContain("tests/fixtures/generated.ts");
 });
 
 function createFixture(): string {

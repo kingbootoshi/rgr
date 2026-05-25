@@ -38,6 +38,12 @@ Capture Red:
 rgr --root "$REPO" red --strict --goal-id "<goal-id>" --test "<test-file>" -- bun test "<test-file>"
 ```
 
+Protect a helper, fixture, snapshot, or config file that defines the Red oracle:
+
+```bash
+rgr --root "$REPO" red --strict --goal-id "<goal-id>" --test "<test-file>" --protect "<support-file>" -- bun test "<test-file>"
+```
+
 Prove Green:
 
 ```bash
@@ -67,7 +73,7 @@ rgr --root "$REPO" verify --ci --replay -- bun test
 1. Orient on the requested behavior and public contract.
 2. Check the worktree so existing user edits are visible before Red.
 3. Choose the narrowest meaningful behavior test that proves the request.
-4. Write or update only the test-surface file and any needed test helper.
+4. Write or update only the root test and any needed helper, fixture, snapshot, or test config.
 5. Run `rgr red --strict` with the focused test file.
 6. Read the Red failure and confirm it points at the intended behavior.
 7. Edit production code only after Red is captured.
@@ -76,6 +82,8 @@ rgr --root "$REPO" verify --ci --replay -- bun test
 10. Run `rgr refactor -- bun test` after Green for broader validation.
 11. Run `rgr verify --ci --replay -- bun test` before handoff.
 12. Report cycle ids, protected files, evidence paths, and verification output.
+
+Use `--test` only for root assertion-bearing tests. Use `--protect` for support files that change what the Red test means. Do not pass helpers or fixtures as `--test`.
 
 ## Good Red Tests
 

@@ -16,6 +16,17 @@ export function isTestSurface(repoPath: string): boolean {
 }
 
 export function isRootTestFile(repoPath: string): boolean {
+  if (
+    isFixture(repoPath) ||
+    isSnapshot(repoPath) ||
+    isRunnerConfig(repoPath) ||
+    isPackageManifest(repoPath) ||
+    isLockfile(repoPath) ||
+    isTestHelper(repoPath)
+  ) {
+    return false;
+  }
+
   return (
     /\.(test|spec|e2e|integration)\.[cm]?[jt]sx?$/.test(repoPath) ||
     /_test\.[cm]?[jt]sx?$/.test(repoPath) ||
@@ -54,20 +65,22 @@ export function isLockfile(repoPath: string): boolean {
 
 export function isTestHelper(repoPath: string): boolean {
   return (
-    /(^|\/)(test-utils?|helpers?|support)\//.test(repoPath) ||
+    /(^|\/)(test-utils?|test-helpers?|testing|support)\//.test(repoPath) ||
+    /(^|\/)(tests?|spec)\/(helpers?|support|test-utils?|test-helpers?)\//.test(repoPath) ||
+    /(^|\/)(tests?|spec)\/.*\/(helpers?|support|test-utils?|test-helpers?)\//.test(repoPath) ||
     /(^|\/).*test[-_.]helpers?\.[cm]?[jt]sx?$/.test(repoPath) ||
     /(^|\/).*test[-_.]utils?\.[cm]?[jt]sx?$/.test(repoPath)
   );
 }
 
 export function protectedRoleFor(repoPath: string): ProtectedRole | null {
-  if (isRootTestFile(repoPath)) return "root-test";
-  if (isSnapshot(repoPath)) return "snapshot";
   if (isFixture(repoPath)) return "fixture";
+  if (isSnapshot(repoPath)) return "snapshot";
   if (isRunnerConfig(repoPath)) return "runner-config";
   if (isPackageManifest(repoPath)) return "package-manifest";
   if (isLockfile(repoPath)) return "lockfile";
   if (isTestHelper(repoPath)) return "test-helper";
+  if (isRootTestFile(repoPath)) return "root-test";
   return null;
 }
 

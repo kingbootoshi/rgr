@@ -38,10 +38,12 @@ const checks: Check[] = [];
 try {
   checks.push(checkCommandProof());
   checks.push(checkExplicitTestHandling());
+  checks.push(checkExplicitProtectedSupport());
   checks.push(checkProtectedScope());
   checks.push(checkGreenCommandLock());
   checks.push(checkMultiCycleReplay());
   checks.push(checkRedSelfMutation());
+  checks.push(checkRedGeneratedSupport());
   checks.push(checkInspectionWarnings());
 } finally {
   for (const root of TEMP_ROOTS.splice(0)) {
@@ -89,6 +91,7 @@ const report = {
   },
   researchGrounding: [
     "Oracle result 23enr0oj: strict argv proof, protected scope closure, hash-chain heads, CI replay",
+    "Oracle result m6fqozba: support-first protected role classification, first-class --protect UX, root-test-only inspection",
     "docs/EVALS.md"
   ],
   suites: [suite]
@@ -114,16 +117,43 @@ function checkExplicitTestHandling(): Check {
   return resultCheck("explicit-test-handling", result.status === 1 && result.stderr.includes("--test must point to a root test file"), "`--test` rejects production source files.", { result });
 }
 
+function checkExplicitProtectedSupport(): Check {
+  const root = createFixture();
+  mkdirSync(path.join(root, "tests/fixtures"), { recursive: true });
+  writeFileSync(path.join(root, "tests/fixtures/env.ts"), "export const expected = 5;\n");
+  writeFileSync(path.join(root, "tests/config.test.ts"), "import { expect, test } from \"bun:test\";\nimport { add } from \"../src/calc\";\nimport { expected } from \"./fixtures/env\";\ntest(\"adds\", () => expect(add(2, 3)).toBe(expected));\n");
+  const red = runRgr(root, ["red", "--strict", "--goal-id", "support", "--test", "tests/config.test.ts", "--protect", "tests/fixtures/env.ts", "--", "bun", "test", "tests/config.test.ts"]);
+  const inspect = runRgr(root, ["inspect-test", "--json"]);
+  writeFixedAdd(root);
+  writeFileSync(path.join(root, "tests/fixtures/env.ts"), "export const expected = 0;\n");
+  const green = runRgr(root, ["green"]);
+  const supportAsTestRoot = createFixture();
+  mkdirSync(path.join(supportAsTestRoot, "tests/fixtures"), { recursive: true });
+  writeFileSync(path.join(supportAsTestRoot, "tests/fixtures/env.ts"), "export const expected = 5;\n");
+  const supportAsTest = runRgr(supportAsTestRoot, ["red", "--strict", "--goal-id", "support-as-test", "--test", "tests/fixtures/env.ts", "--", "bun", "test", "tests/fixtures/env.ts"]);
+  const ok = red.status === 0
+    && inspect.status === 0
+    && inspect.stdout.includes("\"protectedSupport\"")
+    && !inspect.stdout.includes("no-expect")
+    && green.status === 1
+    && green.stderr.includes("Protected Red files changed")
+    && supportAsTest.status === 1
+    && supportAsTest.stderr.includes("Use --protect");
+  return resultCheck("explicit-protected-support", ok, "`--protect` accepts fixtures, inspect ignores support assertions, and fixture tampering is blocked.", { red, inspect, green, supportAsTest });
+}
+
 function checkProtectedScope(): Check {
   const root = createFixture();
   mkdirSync(path.join(root, "src/test-utils"), { recursive: true });
-  writeFileSync(path.join(root, "src/test-utils/make-calc.ts"), "import { add } from \"../calc\";\nexport function runAdd(a: number, b: number): number {\n  return add(a, b);\n}\n");
-  writeFileSync(path.join(root, "src/calc.test.ts"), "import { expect, test } from \"bun:test\";\nimport { runAdd } from \"./test-utils/make-calc\";\ntest(\"adds\", () => expect(runAdd(2, 3)).toBe(5));\n");
+  mkdirSync(path.join(root, "tests/fixtures"), { recursive: true });
+  writeFileSync(path.join(root, "tests/fixtures/env.ts"), "export const expected = 5;\n");
+  writeFileSync(path.join(root, "src/test-utils/make-calc.ts"), "import { add } from \"../calc\";\nimport { expected } from \"../../tests/fixtures/env\";\nexport function runAdd(a: number, b: number): number {\n  return add(a, b);\n}\nexport { expected };\n");
+  writeFileSync(path.join(root, "src/calc.test.ts"), "import { expect, test } from \"bun:test\";\nimport { expected, runAdd } from \"./test-utils/make-calc\";\ntest(\"adds\", () => expect(runAdd(2, 3)).toBe(expected));\n");
   const red = runRgr(root, ["red", "--strict", "--goal-id", "protect", "--test", "src/calc.test.ts", "--", "bun", "test", "src/calc.test.ts"]);
   writeFixedAdd(root);
   writeFileSync(path.join(root, "src/test-utils/make-calc.ts"), "export function runAdd(): number { return 5; }\n");
   const green = runRgr(root, ["green"]);
-  return resultCheck("protected-scope", red.status === 0 && green.status === 1 && green.stderr.includes("Protected Red test files changed"), "Imported helpers are protected before Green.", { red, green });
+  return resultCheck("protected-scope", red.status === 0 && green.status === 1 && green.stderr.includes("Protected Red files changed"), "Imported helpers and their fixtures are protected before Green.", { red, green });
 }
 
 function checkGreenCommandLock(): Check {
@@ -159,6 +189,19 @@ function checkRedSelfMutation(): Check {
   writeFileSync(path.join(root, "src/mutating.test.ts"), "import { appendFileSync } from \"node:fs\";\nimport { expect, test } from \"bun:test\";\ntest(\"mutates\", () => {\n  appendFileSync(import.meta.path, \"\\n// mutated\\n\");\n  expect(1).toBe(2);\n});\n");
   const red = runRgr(root, ["red", "--strict", "--goal-id", "mutating", "--test", "src/mutating.test.ts", "--", "bun", "test", "src/mutating.test.ts"]);
   return resultCheck("red-self-mutation", red.status === 1 && red.stderr.includes("Protected files changed while the Red command ran"), "Red command cannot mutate protected tests.", { red });
+}
+
+function checkRedGeneratedSupport(): Check {
+  const root = createFixture();
+  mkdirSync(path.join(root, "tests"), { recursive: true });
+  writeFileSync(path.join(root, "tests/generated-support.test.ts"), "import { mkdirSync, writeFileSync } from \"node:fs\";\nimport { expect, test } from \"bun:test\";\ntest(\"creates support\", () => {\n  mkdirSync(new URL(\"./fixtures\", import.meta.url), { recursive: true });\n  writeFileSync(new URL(\"./fixtures/generated.ts\", import.meta.url), \"export const value = 1;\\n\");\n  expect(1).toBe(2);\n});\n");
+  const red = runRgr(root, ["red", "--strict", "--goal-id", "generated-support", "--test", "tests/generated-support.test.ts", "--", "bun", "test", "tests/generated-support.test.ts"]);
+  return resultCheck(
+    "red-generated-support",
+    red.status === 1 && red.stderr.includes("Red command created or modified unprotected test support") && red.stderr.includes("tests/fixtures/generated.ts"),
+    "Red command cannot create unprotected helper/fixture support while producing proof.",
+    { red }
+  );
 }
 
 function checkInspectionWarnings(): Check {

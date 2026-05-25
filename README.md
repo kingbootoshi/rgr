@@ -69,6 +69,9 @@ rgr init --goal-id billing-scope
 # 2. Write only the failing test, then capture Red.
 rgr red --strict --goal-id billing-scope --test src/billing.test.ts -- bun test src/billing.test.ts
 
+# Optional: explicitly freeze a helper, fixture, snapshot, or config file that defines the Red oracle.
+rgr red --strict --goal-id billing-scope --test src/billing.test.ts --protect tests/fixtures/billing.ts -- bun test src/billing.test.ts
+
 # 3. Implement production code, then prove Green.
 rgr green
 
@@ -91,6 +94,8 @@ Every run writes `.rgr/manifest.json`, `.rgr/events.jsonl`, snapshots, diffs, an
 - Every command proof uses argv after `--`, currently direct `bun test` only.
 - Green runs the exact Red command.
 - Strict Red protects imported test helpers, fixtures, snapshots, package/test config, and lockfiles that can change what the test means.
+- `--test` is only for root assertion-bearing tests; use `--protect` for helpers, fixtures, snapshots, and test config.
+- `inspect-test` inspects root tests and reports protected support separately, so fixtures are not warned for lacking `expect()`.
 - `verify --ci --replay` reconstructs the Red proof from the recorded git base commit and protected snapshots.
 - Same-file multi-cycle work is supported through current protected heads: each Red hash is frozen through its Green, then a later Red can intentionally advance the file.
 - Wrong tests must be superseded through `rgr revise-test`, then replaced by a new Red proof.

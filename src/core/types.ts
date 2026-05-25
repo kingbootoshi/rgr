@@ -226,6 +226,7 @@ export interface InspectionReceipt {
   at: string;
   cycleId: string;
   files: string[];
+  supportFiles?: string[];
   warnings: InspectionWarning[];
   evidencePath: string;
 }

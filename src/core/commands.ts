@@ -23,8 +23,9 @@ import {
 } from "./manifest";
 import { ensureRgrDirs, normalizeRepoPath, repoAbsolute, resolveRoot } from "./paths";
 import { runBinary } from "./process";
-import { collectProtectedScope, changedSourceFiles, toSnapshotInputs } from "./protect";
-import type { CliOptions, CommandProof, CommandReceipt, Cycle, InspectionWarning, Manifest } from "./types";
+import { collectProtectedScope, changedSourceFiles, changedUnprotectedTestSurface, toSnapshotInputs } from "./protect";
+import { protectedRoleFor } from "./test-surface";
+import type { CliOptions, CommandProof, CommandReceipt, Cycle, InspectionWarning, Manifest, ProtectedFile } from "./types";
 
 export function initCommand(options: CliOptions): string {
   const root = resolveRoot(options.root);
@@ -78,6 +79,14 @@ export function redCommand(options: CliOptions): string {
   const protectedMutation = changedProtectedHashes(root, beforeHashes);
   if (protectedMutation.length > 0) {
     fail(["Protected files changed while the Red command ran:", ...protectedMutation.map((file) => `- ${file}`)].join("\n"));
+  }
+  const unprotectedTestSurfaceAfter = changedUnprotectedTestSurface(changedAfter, protectedPaths);
+  if (unprotectedTestSurfaceAfter.length > 0) {
+    fail([
+      "Red command created or modified unprotected test support.",
+      ...unprotectedTestSurfaceAfter.map((file) => `- ${file}`),
+      "Add the file with --test when it is a root test, or --protect when it is helper/fixture/snapshot/config support."
+    ].join("\n"));
   }
   const sourceChangesAfter = changedSourceFiles(changedAfter, protectedPaths);
   if (sourceChangesAfter.length > 0 && !options.allowSourceChanges) {
@@ -167,7 +176,7 @@ export function redCommand(options: CliOptions): string {
 
   return [
     `Red captured: cycle ${cycleId}`,
-    `Protected files: ${cycle.red.protectedFiles.map((file) => file.path).join(", ")}`,
+    ...formatProtectedSummary(cycle.red.protectedFiles),
     failure.warning ? `Warning: ${failure.warning}` : `Failure kind: ${failure.kind}`
   ].join("\n");
 }
@@ -336,14 +345,23 @@ export function inspectTestCommand(options: CliOptions): string {
   if (!cycle) {
     fail("No cycle found to inspect.");
   }
-  const files = cycle.red.protectedFiles.filter((file) => (file.role ?? "root-test") === "root-test").map((file) => file.path);
+  const files = cycle.red.protectedFiles.filter((file) => protectedRoleForManifest(file) === "root-test").map((file) => file.path);
+  const supportFiles = cycle.red.protectedFiles
+    .filter((file) => protectedRoleForManifest(file) !== "root-test")
+    .map((file) => ({
+      path: file.path,
+      role: protectedRoleForManifest(file),
+      source: file.source ?? "changed-test-surface"
+    }));
   const warnings = inspectFiles(root, files);
   const evidencePath = `.rgr/evidence/${cycle.id}-inspect.json`;
-  writeFileSync(path.join(root, evidencePath), `${JSON.stringify({ cycleId: cycle.id, files, warnings }, null, 2)}\n`);
+  const payload = { cycleId: cycle.id, files, rootTests: files, protectedSupport: supportFiles, warnings };
+  writeFileSync(path.join(root, evidencePath), `${JSON.stringify(payload, null, 2)}\n`);
   cycle.inspection = {
     at: new Date().toISOString(),
     cycleId: cycle.id,
     files,
+    supportFiles: supportFiles.map((file) => file.path),
     warnings,
     evidencePath
   };
@@ -353,11 +371,15 @@ export function inspectTestCommand(options: CliOptions): string {
     fail(`inspect-test found ${warnings.length} warning(s). Evidence: ${evidencePath}`);
   }
   if (options.json) {
-    return JSON.stringify({ cycleId: cycle.id, files, warnings }, null, 2);
+    return JSON.stringify(payload, null, 2);
   }
   return warnings.length === 0
-    ? `Inspection passed: cycle ${cycle.id}`
-    : [`Inspection warnings: ${warnings.length}`, ...warnings.map((warning) => `- ${warning.file}: ${warning.kind} - ${warning.message}`)].join("\n");
+    ? [`Inspection passed: cycle ${cycle.id}`, `Root tests: ${formatPathList(files)}`, `Protected support: ${formatSupportList(supportFiles)}`].join("\n")
+    : [
+        `Inspection warnings: ${warnings.length}`,
+        ...warnings.map((warning) => `- ${warning.file}: ${warning.kind} - ${warning.message}`),
+        `Protected support: ${formatSupportList(supportFiles)}`
+      ].join("\n");
 }
 
 export function promptCommand(): string {
@@ -370,6 +392,7 @@ export function promptCommand(): string {
     "1. Inspect the public contract and choose the narrowest behavior that proves the requested change.",
     "2. Write or update only the test-surface file for that behavior.",
     "3. Run `rgr red --strict --goal-id <goal> --test <test-file> -- bun test <test-file>` and keep the evidence.",
+    "   Use `--protect <support-file>` for helpers, fixtures, snapshots, or config that define the Red oracle.",
     "4. Edit production code only after Red is captured.",
     "5. Run `rgr green`; strict Green uses the exact Red command.",
     "6. Refactor only after Green, then run `rgr refactor -- bun test`.",
@@ -381,6 +404,7 @@ export function promptCommand(): string {
     "- Include tenant, auth, permission, time, persistence, or concurrency constraints when those define correctness.",
     "- Avoid mock-echo tests, result.ok-only checks, and snapshots with unnamed behavior.",
     "- If the Red test is wrong, run `rgr revise-test --reason \"<why>\"`, then capture a new Red proof.",
+    "- Never pass helpers or fixtures as `--test`; protect them with `--protect`.",
     "",
     "Stop condition: each Red-Green proof window passes, current protected heads are unchanged, and strict CI replay proves Red on base plus Green/final validation on the final tree."
   ].join("\n");
@@ -413,14 +437,43 @@ function assertProtectedUnchanged(root: string, manifest: Manifest, cycleFilter?
 
   fail(
     [
-      "Protected Red test files changed. RGR cannot prove Green against the same Red test.",
+      "Protected Red files changed. RGR cannot prove Green against the same Red test/support surface.",
       ...verified.mismatches.map((mismatch) => {
         const actual = mismatch.actual ? `actual ${mismatch.actual}` : "missing";
         return `- cycle ${mismatch.cycleId}: ${mismatch.path} expected ${mismatch.expected}, ${actual}`;
       }),
-      "If the test was wrong, run rgr revise-test --reason \"<why>\" and capture a new Red proof."
+      "If the test or protected support was wrong, run rgr revise-test --reason \"<why>\" and capture a new Red proof."
     ].join("\n")
   );
+}
+
+function formatProtectedSummary(files: ProtectedFile[]): string[] {
+  const rootTests = files.filter((file) => protectedRoleForManifest(file) === "root-test").map((file) => file.path);
+  const supportFiles = files
+    .filter((file) => protectedRoleForManifest(file) !== "root-test")
+    .map((file) => ({
+      path: file.path,
+      role: protectedRoleForManifest(file),
+      source: file.source ?? "changed-test-surface"
+    }));
+  return [
+    `Root tests: ${formatPathList(rootTests)}`,
+    `Protected support: ${formatSupportList(supportFiles)}`
+  ];
+}
+
+function protectedRoleForManifest(file: ProtectedFile): NonNullable<ProtectedFile["role"]> {
+  return protectedRoleFor(file.path) ?? file.role ?? "root-test";
+}
+
+function formatPathList(files: string[]): string {
+  return files.length === 0 ? "none" : files.join(", ");
+}
+
+function formatSupportList(files: Array<{ path: string; role?: string }>): string {
+  return files.length === 0
+    ? "none"
+    : files.map((file) => `${file.path} (${file.role ?? "support"})`).join(", ");
 }
 
 function runPassingReceipt(root: string, cycleId: string, label: string, command: CommandProof, phase: "green" | "refactor" | "verify", manifest: Manifest): CommandReceipt {

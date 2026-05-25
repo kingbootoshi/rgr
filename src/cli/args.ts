@@ -45,7 +45,7 @@ export function parseCli(argv: string[]): ParsedCli {
   }
   const command = normalizeCommand(argv[commandIndex]);
   const optionArgs = [...argv.slice(0, commandIndex), ...argv.slice(commandIndex + 1)];
-  const options: CliOptions = { ...DEFAULT_OPTIONS, tests: [] };
+  const options: CliOptions = { ...DEFAULT_OPTIONS, tests: [], protects: [] };
 
   for (let index = 0; index < optionArgs.length; index += 1) {
     const arg = optionArgs[index];
@@ -138,7 +138,7 @@ export function helpText(): string {
     "",
     "Usage:",
     "  rgr init --goal-id <goal> [--root <repo>] [--ledger <events.jsonl>]",
-    "  rgr red --goal-id <goal> --test <path> -- bun test <path>",
+    "  rgr red --goal-id <goal> --test <root-test> [--protect <support-file>] -- bun test <root-test>",
     "  rgr green",
     "  rgr refactor -- bun test",
     "  rgr revise-test --reason \"<why the old Red was wrong>\"",
@@ -152,7 +152,7 @@ export function helpText(): string {
     "  --root <repo>              Repository root, defaults to cwd",
     "  --ledger <events.jsonl>     Optional external JSONL event ledger",
     "  --test <path>               Explicit root test file, repeatable",
-    "  --protect <path>            Explicit helper/fixture/config to protect",
+    "  --protect <path>            Explicit helper/fixture/snapshot/config support to protect",
     "  --strict                    Require explicit test selection and cleaner Red failures",
     "  --replay                    Replay Red receipts during verify --ci",
     "  --allow-source-changes      Override Red source-change rejection",
@@ -161,7 +161,7 @@ export function helpText(): string {
     "  --ci                        Require completed cycles during verify",
     "",
     "Shortcut:",
-    "  rgr red --strict --goal-id my-goal --test src/foo.test.ts -- bun test src/foo.test.ts"
+    "  rgr red --strict --goal-id my-goal --test src/foo.test.ts --protect tests/fixtures/foo.ts -- bun test src/foo.test.ts"
   ].join("\n");
 }
 

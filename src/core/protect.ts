@@ -47,7 +47,7 @@ export function collectProtectedScope(root: string, options: CliOptions, command
   for (const raw of options.tests) {
     const repoPath = normalizeRepoPath(root, raw);
     if (!isRootTestFile(repoPath)) {
-      fail(`--test must point to a root test file, not ${repoPath}`);
+      fail(`--test must point to a root test file, not ${repoPath}. Use --protect for helpers, fixtures, snapshots, and test config.`);
     }
     addCandidate(candidates, repoPath, "root-test", "explicit-test");
   }
@@ -67,7 +67,7 @@ export function collectProtectedScope(root: string, options: CliOptions, command
   for (const file of changed) {
     const role = protectedRoleFor(file);
     if (role && isTestSurface(file)) {
-      addCandidate(candidates, file, role, role === "root-test" ? "changed-test-surface" : "explicit-protect");
+      addCandidate(candidates, file, role, "changed-test-surface");
     }
   }
 
@@ -89,6 +89,10 @@ export function collectProtectedScope(root: string, options: CliOptions, command
 
 export function changedSourceFiles(changed: string[], protectedPaths: Set<string>): string[] {
   return changed.filter((file) => !protectedPaths.has(file) && !isTestSurface(file));
+}
+
+export function changedUnprotectedTestSurface(changed: string[], protectedPaths: Set<string>): string[] {
+  return changed.filter((file) => !protectedPaths.has(file) && isTestSurface(file));
 }
 
 export function toSnapshotInputs(candidates: ProtectedCandidate[], previousHeads: Map<string, { cycleId: string; sha256: string }>): Array<{ path: string; role: ProtectedRole; source: ProtectedSource; previousCycleId?: string; previousSha256?: string }> {
@@ -126,7 +130,7 @@ function addRunnerConfig(root: string, candidates: Map<string, ProtectedCandidat
 }
 
 function addImportClosure(root: string, candidates: Map<string, ProtectedCandidate>): void {
-  const queue = [...candidates.values()].filter((candidate) => candidate.role === "root-test" || candidate.role === "test-helper").map((candidate) => candidate.path);
+  const queue = [...candidates.values()].filter((candidate) => canHaveImportClosure(candidate.role)).map((candidate) => candidate.path);
   const seen = new Set<string>();
 
   while (queue.length > 0) {
@@ -155,11 +159,15 @@ function addImportClosure(root: string, candidates: Map<string, ProtectedCandida
         continue;
       }
       addCandidate(candidates, resolved, role, "import-closure");
-      if (role === "test-helper") {
+      if (canHaveImportClosure(role)) {
         queue.push(resolved);
       }
     }
   }
+}
+
+function canHaveImportClosure(role: ProtectedRole): boolean {
+  return role === "root-test" || role === "test-helper" || role === "fixture";
 }
 
 function importSpecifiers(text: string): string[] {
