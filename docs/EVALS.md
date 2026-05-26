@@ -23,6 +23,10 @@ Traces came from the prior ledger dogfood run and current e2e suite:
 - non-`bun test` command proof
 - same-file multi-cycle work blocked by permanent hashes
 - Red command mutating its own test oracle
+- stale replay cycle blocking later good cycles
+- targeted replay silently skipping active replay receipts
+- pre-existing dirty source needed for Red but not reconstructed during replay
+- Red command mutating source or git state while producing proof
 
 ## Tier 1 Checks
 
@@ -32,6 +36,8 @@ Traces came from the prior ledger dogfood run and current e2e suite:
 - protected-scope: helper/config files that influence the Red test are protected
 - green-command-lock: Green runs the exact Red command
 - multi-cycle-hash-chain: same-file test extension works across Red-Green cycles
+- replay-targeting: targeted replay can skip known noisy cycles while reporting scope and rejecting invalid selectors
+- dirty-source-replay-guard: dirty source present before Red is replayed exactly, while Red-command source mutation is rejected
 - red-self-mutation: Red commands cannot rewrite protected files while running
 - red-generated-support: Red commands cannot create unprotected helper/fixture support while running
 - quality-inspection: weak tests produce inspection warnings

@@ -68,6 +68,13 @@ Run the final gate:
 rgr --root "$REPO" verify --ci --replay -- bun test
 ```
 
+If an older completed cycle has known replay-only environment noise, use targeted replay as an exception path instead of skipping verification entirely. Report the replay selector and skipped active cycles in the handoff.
+
+```bash
+rgr --root "$REPO" verify --ci --replay --cycle latest -- bun test
+rgr --root "$REPO" verify --ci --replay --from-cycle "<cycle-id>" -- bun test
+```
+
 ## Workflow
 
 1. Orient on the requested behavior and public contract.
@@ -100,6 +107,8 @@ Prefer one focused Red for the next behavior step. Add broader integration or e2
 When Red passes, strengthen the test until it proves missing behavior and fails cleanly.
 
 When Red fails from setup noise, repair the test setup and rerun Red before production edits.
+
+Use `--allow-source-changes` only for reviewed source dirtiness that existed before Red starts. RGR snapshots that dirty source for replay. If the Red command creates commits or modifies source files, stop and fix the workflow before recapturing Red.
 
 When the test is wrong, run:
 

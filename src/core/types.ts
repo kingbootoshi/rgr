@@ -17,6 +17,7 @@ export interface CliOptions {
   cmdArgv?: string[];
   ledger?: string;
   cycle?: string;
+  fromCycle?: string;
   reason?: string;
   tests: string[];
   protects: string[];
@@ -168,6 +169,7 @@ export interface ReplayReceipt {
   baseCommit: string | null;
   baseTree: string | null;
   files: ReplayFile[];
+  sourceFiles?: ReplaySourceFile[];
   overlaySha256: string;
 }
 
@@ -176,6 +178,12 @@ export interface ReplayFile {
   sha256: string;
   snapshotPath: string;
   role: ProtectedRole;
+}
+
+export interface ReplaySourceFile {
+  path: string;
+  sha256: string;
+  snapshotPath: string;
 }
 
 export interface ProtectedHead {

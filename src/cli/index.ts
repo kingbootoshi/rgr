@@ -13,7 +13,7 @@ import {
   statusCommand,
   verifyCommand
 } from "../core/commands";
-import { UserError } from "../core/errors";
+import { fail, UserError } from "../core/errors";
 
 async function main(): Promise<void> {
   const parsed = parseCli(process.argv.slice(2));
@@ -30,6 +30,13 @@ async function main(): Promise<void> {
 }
 
 function dispatch(command: string, options: ReturnType<typeof parseCli>["options"]): string {
+  if (command !== "verify" && options.fromCycle) {
+    fail("--from-cycle is only valid with verify --replay.");
+  }
+  if (command !== "verify" && options.cycle === "latest") {
+    fail("--cycle latest is only valid with verify --replay.");
+  }
+
   switch (command) {
     case "init":
       return initCommand(options);

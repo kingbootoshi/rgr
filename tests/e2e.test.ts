@@ -78,6 +78,135 @@ test("rejects Red when production code is already changed", () => {
   expect(red.stderr).toContain("src/calc.ts");
 });
 
+test("allow-source-changes reports reviewed pre-existing source dirtiness", () => {
+  const fixture = createFixture();
+  writeFileSync(path.join(fixture, "src/calc.ts"), [
+    "export function add(a: number, b: number): number {",
+    "  return a - b;",
+    "}",
+    "export function subtract(a: number, b: number): number {",
+    "  return a + b;",
+    "}",
+    "export const reviewedDirtyWork = true;",
+    ""
+  ].join("\n"));
+  writeFileSync(path.join(fixture, "src/calc.test.ts"), [
+    "import { expect, test } from \"bun:test\";",
+    "import { add } from \"./calc\";",
+    "",
+    "test(\"adds two numbers\", () => {",
+    "  expect(add(2, 3)).toBe(5);",
+    "});",
+    ""
+  ].join("\n"));
+
+  const red = runRgr(fixture, ["red", "--strict", "--allow-source-changes", "--goal-id", "source-dirty", "--test", "src/calc.test.ts", "--", "bun", "test", "src/calc.test.ts"]);
+
+  expect(red.status).toBe(0);
+  expect(red.stdout).toContain("Allowed pre-existing source changes: src/calc.ts");
+});
+
+test("allow-source-changes rejects source edits made by the Red command", () => {
+  const fixture = createFixture();
+  writeFileSync(path.join(fixture, "src/calc.ts"), [
+    "export function add(a: number, b: number): number {",
+    "  return a - b;",
+    "}",
+    "export function subtract(a: number, b: number): number {",
+    "  return a + b;",
+    "}",
+    "export const reviewedDirtyWork = true;",
+    ""
+  ].join("\n"));
+  writeFileSync(path.join(fixture, "src/mutates-source.test.ts"), [
+    "import { appendFileSync } from \"node:fs\";",
+    "import { expect, test } from \"bun:test\";",
+    "import { add } from \"./calc\";",
+    "",
+    "test(\"mutates source while failing\", () => {",
+    "  appendFileSync(new URL(\"./calc.ts\", import.meta.url), \"\\nexport const redCommandMutation = true;\\n\");",
+    "  expect(add(2, 3)).toBe(5);",
+    "});",
+    ""
+  ].join("\n"));
+
+  const red = runRgr(fixture, ["red", "--strict", "--allow-source-changes", "--goal-id", "source-mutation", "--test", "src/mutates-source.test.ts", "--", "bun", "test", "src/mutates-source.test.ts"]);
+
+  expect(red.status).toBe(1);
+  expect(red.stderr).toContain("Red command modified source files after Red started");
+  expect(red.stderr).toContain("src/calc.ts");
+});
+
+test("allow-source-changes replays the dirty source state captured at Red", () => {
+  const fixture = createFixture();
+  writeFileSync(path.join(fixture, "src/calc.ts"), [
+    "export function add(a: number, b: number): number {",
+    "  return a - b;",
+    "}",
+    "export function subtract(a: number, b: number): number {",
+    "  return a + b;",
+    "}",
+    "export function multiply(a: number, b: number): number {",
+    "  return a + b;",
+    "}",
+    ""
+  ].join("\n"));
+  writeFileSync(path.join(fixture, "src/multiply.test.ts"), [
+    "import { expect, test } from \"bun:test\";",
+    "import { multiply } from \"./calc\";",
+    "",
+    "test(\"multiplies two numbers\", () => {",
+    "  expect(multiply(2, 3)).toBe(6);",
+    "});",
+    ""
+  ].join("\n"));
+
+  const red = runRgr(fixture, ["red", "--strict", "--allow-source-changes", "--goal-id", "dirty-replay", "--test", "src/multiply.test.ts", "--", "bun", "test", "src/multiply.test.ts"]);
+  expect(red.status).toBe(0);
+  expect(red.stdout).toContain("Allowed pre-existing source changes: src/calc.ts");
+
+  writeFileSync(path.join(fixture, "src/calc.ts"), [
+    "export function add(a: number, b: number): number {",
+    "  return a - b;",
+    "}",
+    "export function subtract(a: number, b: number): number {",
+    "  return a + b;",
+    "}",
+    "export function multiply(a: number, b: number): number {",
+    "  return a * b;",
+    "}",
+    ""
+  ].join("\n"));
+  const green = runRgr(fixture, ["green"]);
+  expect(green.status).toBe(0);
+
+  const verify = runRgr(fixture, ["verify", "--ci", "--replay", "--", "bun", "test"]);
+  expect(verify.status).toBe(0);
+  expect(verify.stdout).toContain("RGR CI verification passed.");
+});
+
+test("Red rejects commands that move git HEAD while running", () => {
+  const fixture = createFixture();
+  writeFileSync(path.join(fixture, "src/git-mutation.test.ts"), [
+    "import { execFileSync } from \"node:child_process\";",
+    "import { writeFileSync } from \"node:fs\";",
+    "import { expect, test } from \"bun:test\";",
+    "",
+    "test(\"commits while running\", () => {",
+    "  writeFileSync(new URL(\"./calc.ts\", import.meta.url), \"export function add(a: number, b: number): number {\\n  return a + b;\\n}\\nexport function subtract(a: number, b: number): number {\\n  return a + b;\\n}\\n\");",
+    "  execFileSync(\"git\", [\"add\", \"src/calc.ts\"]);",
+    "  execFileSync(\"git\", [\"-c\", \"user.name=RGR Test\", \"-c\", \"user.email=rgr@example.local\", \"commit\", \"-m\", \"mutate during red\"]);",
+    "  expect(1).toBe(2);",
+    "});",
+    ""
+  ].join("\n"));
+
+  const red = runRgr(fixture, ["red", "--strict", "--goal-id", "git-mutation", "--test", "src/git-mutation.test.ts", "--", "bun", "test", "src/git-mutation.test.ts"]);
+
+  expect(red.status).toBe(1);
+  expect(red.stderr).toContain("Red command changed git HEAD or tree");
+});
+
 test("supersedes a wrong Red test and requires a new Red proof", () => {
   const fixture = createFixture();
   writeFileSync(path.join(fixture, "src/calc.test.ts"), [
@@ -310,6 +439,109 @@ test("strict CI replay supports same-file multi-cycle hash chains", () => {
   const verify = runRgr(fixture, ["verify", "--ci", "--replay", "--", "bun", "test"]);
   expect(verify.status).toBe(0);
   expect(verify.stdout).toContain("RGR CI verification passed");
+});
+
+test("strict CI replay can target latest or a starting cycle", () => {
+  const fixture = createFixture();
+  writeFileSync(path.join(fixture, "src/setup-noise.test.ts"), [
+    "import { expect, test } from \"bun:test\";",
+    "import { missingValue } from \"./missing\";",
+    "",
+    "test(\"old setup-noisy cycle\", () => {",
+    "  expect(missingValue()).toBe(1);",
+    "});",
+    ""
+  ].join("\n"));
+  expect(runRgr(fixture, ["red", "--goal-id", "targeted-replay", "--test", "src/setup-noise.test.ts", "--", "bun", "test", "src/setup-noise.test.ts"]).status).toBe(0);
+  writeFileSync(path.join(fixture, "src/missing.ts"), "export function missingValue(): number {\n  return 1;\n}\n");
+  expect(runRgr(fixture, ["green"]).status).toBe(0);
+  const manifestAfterNoisyCycle = JSON.parse(readFileSync(path.join(fixture, ".rgr/manifest.json"), "utf8"));
+  expect(manifestAfterNoisyCycle.cycles[0].red.checks.commandWasStrict).toBe(false);
+  run(fixture, "git", ["add", "-A"]);
+  run(fixture, "git", ["-c", "user.name=RGR Test", "-c", "user.email=rgr@example.local", "commit", "-m", "old setup-noisy cycle"]);
+
+  writeFileSync(path.join(fixture, "src/calc.test.ts"), [
+    "import { expect, test } from \"bun:test\";",
+    "import { add } from \"./calc\";",
+    "test(\"adds\", () => expect(add(2, 3)).toBe(5));",
+    ""
+  ].join("\n"));
+  expect(runRgr(fixture, ["red", "--strict", "--goal-id", "targeted-replay", "--test", "src/calc.test.ts", "--", "bun", "test", "src/calc.test.ts"]).status).toBe(0);
+  writeFileSync(path.join(fixture, "src/calc.ts"), "export function add(a: number, b: number): number {\n  return a + b;\n}\nexport function subtract(a: number, b: number): number {\n  return a + b;\n}\n");
+  expect(runRgr(fixture, ["green"]).status).toBe(0);
+
+  const fullReplay = runRgr(fixture, ["verify", "--ci", "--replay", "--", "bun", "test"]);
+  expect(fullReplay.status).toBe(1);
+  expect(fullReplay.stderr).toContain("Replay failed: cycle 001 Red failure did not look behavioral");
+
+  const latestReplay = runRgr(fixture, ["verify", "--ci", "--replay", "--cycle", "latest", "--", "bun", "test"]);
+  expect(latestReplay.status).toBe(0);
+  expect(latestReplay.stdout).toContain("Replay scope: cycles 002");
+  expect(latestReplay.stdout).toContain("Skipped active replay cycles: 001");
+
+  const fromSecondReplay = runRgr(fixture, ["verify", "--ci", "--replay", "--from-cycle", "002", "--", "bun", "test"]);
+  expect(fromSecondReplay.status).toBe(0);
+  expect(fromSecondReplay.stdout).toContain("Replay scope: cycles 002");
+
+  const explicitSecondReplay = runRgr(fixture, ["verify", "--ci", "--replay", "--cycle", "002", "--", "bun", "test"]);
+  expect(explicitSecondReplay.status).toBe(0);
+  expect(explicitSecondReplay.stdout).toContain("Replay scope: cycles 002");
+});
+
+test("verify validates replay selector usage", () => {
+  const fixture = createFixture();
+  writeFileSync(path.join(fixture, "src/calc.test.ts"), [
+    "import { expect, test } from \"bun:test\";",
+    "import { add } from \"./calc\";",
+    "test(\"adds\", () => expect(add(2, 3)).toBe(5));",
+    ""
+  ].join("\n"));
+  expect(runRgr(fixture, ["red", "--strict", "--goal-id", "selector-validation", "--test", "src/calc.test.ts", "--", "bun", "test", "src/calc.test.ts"]).status).toBe(0);
+  writeFileSync(path.join(fixture, "src/calc.ts"), "export function add(a: number, b: number): number {\n  return a + b;\n}\nexport function subtract(a: number, b: number): number {\n  return a + b;\n}\n");
+  expect(runRgr(fixture, ["green"]).status).toBe(0);
+
+  const bothSelectors = runRgr(fixture, ["verify", "--ci", "--replay", "--cycle", "latest", "--from-cycle", "001", "--", "bun", "test"]);
+  expect(bothSelectors.status).toBe(1);
+  expect(bothSelectors.stderr).toContain("Use either --cycle or --from-cycle");
+
+  const unknownCycle = runRgr(fixture, ["verify", "--ci", "--replay", "--cycle", "999", "--", "bun", "test"]);
+  expect(unknownCycle.status).toBe(1);
+  expect(unknownCycle.stderr).toContain("No active cycle found with id 999");
+
+  const selectorWithoutReplay = runRgr(fixture, ["verify", "--ci", "--cycle", "latest", "--", "bun", "test"]);
+  expect(selectorWithoutReplay.status).toBe(1);
+  expect(selectorWithoutReplay.stderr).toContain("--cycle and --from-cycle are only valid with verify --replay");
+
+  const replayWithoutCi = runRgr(fixture, ["verify", "--replay", "--cycle", "latest", "--", "bun", "test"]);
+  expect(replayWithoutCi.status).toBe(1);
+  expect(replayWithoutCi.stderr).toContain("--replay requires --ci");
+});
+
+test("status distinguishes completed active cycles from open cycles", () => {
+  const fixture = createFixture();
+  writeFileSync(path.join(fixture, "src/calc.test.ts"), [
+    "import { expect, test } from \"bun:test\";",
+    "import { add } from \"./calc\";",
+    "test(\"adds\", () => expect(add(2, 3)).toBe(5));",
+    ""
+  ].join("\n"));
+  expect(runRgr(fixture, ["red", "--strict", "--goal-id", "status-counts", "--test", "src/calc.test.ts", "--", "bun", "test", "src/calc.test.ts"]).status).toBe(0);
+  writeFileSync(path.join(fixture, "src/calc.ts"), "export function add(a: number, b: number): number {\n  return a + b;\n}\nexport function subtract(a: number, b: number): number {\n  return a + b;\n}\n");
+  expect(runRgr(fixture, ["green"]).status).toBe(0);
+
+  const jsonStatus = runRgr(fixture, ["status", "--json"]);
+  expect(jsonStatus.status).toBe(0);
+  const payload = JSON.parse(jsonStatus.stdout);
+  expect(payload.cycleCounts).toMatchObject({ total: 1, active: 1, completed: 1, open: 0, superseded: 0 });
+  expect(payload.cycles).toBeUndefined();
+  expect(payload.statusSchemaVersion).toBeUndefined();
+  expect(payload.activeCycleRecords).toBeUndefined();
+  expect(payload.activeCycles).toEqual([{ id: "001", status: "green", completed: true }]);
+  expect(payload.openCycles).toEqual([]);
+
+  const textStatus = runRgr(fixture, ["status"]);
+  expect(textStatus.status).toBe(0);
+  expect(textStatus.stdout).toContain("Cycles: 1 total, 1 active completed, 0 open");
 });
 
 test("strict Red rejects commands that mutate protected tests while running", () => {

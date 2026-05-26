@@ -42,6 +42,8 @@ try {
   checks.push(checkProtectedScope());
   checks.push(checkGreenCommandLock());
   checks.push(checkMultiCycleReplay());
+  checks.push(checkReplayTargeting());
+  checks.push(checkDirtySourceReplayAndGuard());
   checks.push(checkRedSelfMutation());
   checks.push(checkRedGeneratedSupport());
   checks.push(checkInspectionWarnings());
@@ -182,6 +184,64 @@ function checkMultiCycleReplay(): Check {
   const green2 = runRgr(root, ["green"]);
   const verify = runRgr(root, ["verify", "--ci", "--replay", "--", "bun", "test"]);
   return resultCheck("multi-cycle-hash-chain", [red1, green1, red2, green2, verify].every((result) => result.status === 0), "Same-file multi-cycle proof passes strict replay.", { red1, green1, red2, green2, verify });
+}
+
+function checkReplayTargeting(): Check {
+  const root = createFixture();
+  writeFileSync(path.join(root, "src/setup-noise.test.ts"), "import { expect, test } from \"bun:test\";\nimport { missingValue } from \"./missing\";\ntest(\"old setup-noisy cycle\", () => expect(missingValue()).toBe(1));\n");
+  const red1 = runRgr(root, ["red", "--goal-id", "targeted-replay", "--test", "src/setup-noise.test.ts", "--", "bun", "test", "src/setup-noise.test.ts"]);
+  writeFileSync(path.join(root, "src/missing.ts"), "export function missingValue(): number {\n  return 1;\n}\n");
+  const green1 = runRgr(root, ["green"]);
+  run(root, "git", ["add", "-A"]);
+  run(root, "git", ["-c", "user.name=RGR Eval", "-c", "user.email=rgr@example.local", "commit", "-m", "old setup-noisy cycle"]);
+
+  writeAddTest(root);
+  const red2 = runRgr(root, ["red", "--strict", "--goal-id", "targeted-replay", "--test", "src/calc.test.ts", "--", "bun", "test", "src/calc.test.ts"]);
+  writeFixedAdd(root);
+  const green2 = runRgr(root, ["green"]);
+
+  const fullReplay = runRgr(root, ["verify", "--ci", "--replay", "--", "bun", "test"]);
+  const latestReplay = runRgr(root, ["verify", "--ci", "--replay", "--cycle", "latest", "--", "bun", "test"]);
+  const fromReplay = runRgr(root, ["verify", "--ci", "--replay", "--from-cycle", "002", "--", "bun", "test"]);
+  const explicitReplay = runRgr(root, ["verify", "--ci", "--replay", "--cycle", "002", "--", "bun", "test"]);
+  const unknownReplay = runRgr(root, ["verify", "--ci", "--replay", "--cycle", "999", "--", "bun", "test"]);
+  const selectorWithoutReplay = runRgr(root, ["verify", "--ci", "--cycle", "latest", "--", "bun", "test"]);
+  const ok = red1.status === 0
+    && green1.status === 0
+    && red2.status === 0
+    && green2.status === 0
+    && fullReplay.status === 1
+    && fullReplay.stderr.includes("Red failure did not look behavioral")
+    && latestReplay.status === 0
+    && latestReplay.stdout.includes("Replay scope: cycles 002")
+    && latestReplay.stdout.includes("Skipped active replay cycles: 001")
+    && fromReplay.status === 0
+    && explicitReplay.status === 0
+    && unknownReplay.status === 1
+    && selectorWithoutReplay.status === 1;
+  return resultCheck("replay-targeting", ok, "Targeted replay can skip an older noisy cycle while reporting replay scope and rejecting invalid selectors.", { red1, green1, red2, green2, fullReplay, latestReplay, fromReplay, explicitReplay, unknownReplay, selectorWithoutReplay });
+}
+
+function checkDirtySourceReplayAndGuard(): Check {
+  const root = createFixture();
+  writeFileSync(path.join(root, "src/calc.ts"), "export function add(a: number, b: number): number {\n  return a - b;\n}\nexport function subtract(a: number, b: number): number {\n  return a + b;\n}\nexport function multiply(a: number, b: number): number {\n  return a + b;\n}\n");
+  writeFileSync(path.join(root, "src/multiply.test.ts"), "import { expect, test } from \"bun:test\";\nimport { multiply } from \"./calc\";\ntest(\"multiplies\", () => expect(multiply(2, 3)).toBe(6));\n");
+  const red = runRgr(root, ["red", "--strict", "--allow-source-changes", "--goal-id", "dirty-replay", "--test", "src/multiply.test.ts", "--", "bun", "test", "src/multiply.test.ts"]);
+  writeFileSync(path.join(root, "src/calc.ts"), "export function add(a: number, b: number): number {\n  return a - b;\n}\nexport function subtract(a: number, b: number): number {\n  return a + b;\n}\nexport function multiply(a: number, b: number): number {\n  return a * b;\n}\n");
+  const green = runRgr(root, ["green"]);
+  const verify = runRgr(root, ["verify", "--ci", "--replay", "--", "bun", "test"]);
+
+  const mutationRoot = createFixture();
+  writeFileSync(path.join(mutationRoot, "src/mutates-source.test.ts"), "import { appendFileSync } from \"node:fs\";\nimport { expect, test } from \"bun:test\";\nimport { add } from \"./calc\";\ntest(\"mutates source\", () => {\n  appendFileSync(new URL(\"./calc.ts\", import.meta.url), \"\\nexport const redCommandMutation = true;\\n\");\n  expect(add(2, 3)).toBe(5);\n});\n");
+  const mutationRed = runRgr(mutationRoot, ["red", "--strict", "--allow-source-changes", "--goal-id", "source-mutation", "--test", "src/mutates-source.test.ts", "--", "bun", "test", "src/mutates-source.test.ts"]);
+
+  const ok = red.status === 0
+    && red.stdout.includes("Allowed pre-existing source changes")
+    && green.status === 0
+    && verify.status === 0
+    && mutationRed.status === 1
+    && mutationRed.stderr.includes("Red command modified source files after Red started");
+  return resultCheck("dirty-source-replay-guard", ok, "Pre-existing dirty source is replayed exactly, while Red-command source mutation is rejected.", { red, green, verify, mutationRed });
 }
 
 function checkRedSelfMutation(): Check {

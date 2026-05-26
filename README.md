@@ -84,6 +84,16 @@ rgr verify --ci --replay -- bun test
 
 Every run writes `.rgr/manifest.json`, `.rgr/events.jsonl`, snapshots, diffs, and command output logs.
 
+When an older completed cycle has known replay-only environment noise, targeted replay can keep later cycles moving while still requiring Green receipts, protected heads, and the final verify command. Treat this as an exception path and report the replay scope.
+
+```bash
+# Replay only the latest active cycle.
+rgr verify --ci --replay --cycle latest -- bun test
+
+# Replay active cycles from a known cycle onward.
+rgr verify --ci --replay --from-cycle 004 -- bun test
+```
+
 ## What It Enforces
 
 - Red must fail.
@@ -97,9 +107,11 @@ Every run writes `.rgr/manifest.json`, `.rgr/events.jsonl`, snapshots, diffs, an
 - `--test` is only for root assertion-bearing tests; use `--protect` for helpers, fixtures, snapshots, and test config.
 - `inspect-test` inspects root tests and reports protected support separately, so fixtures are not warned for lacking `expect()`.
 - `verify --ci --replay` reconstructs the Red proof from the recorded git base commit and protected snapshots.
+- `verify --ci --replay --cycle latest` replays only the latest active cycle; `--from-cycle <id>` replays active cycles from that id onward and reports skipped active cycles.
 - Same-file multi-cycle work is supported through current protected heads: each Red hash is frozen through its Green, then a later Red can intentionally advance the file.
 - Wrong tests must be superseded through `rgr revise-test`, then replaced by a new Red proof.
 - `verify --ci` requires every active cycle to have Red and Green receipts.
+- `--allow-source-changes` permits reviewed source dirtiness that already existed before Red starts and snapshots that dirty source into replay; the Red command itself may not create commits or modify source files.
 
 ## Threat Model
 

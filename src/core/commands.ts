@@ -25,7 +25,7 @@ import { ensureRgrDirs, normalizeRepoPath, repoAbsolute, resolveRoot } from "./p
 import { runBinary } from "./process";
 import { collectProtectedScope, changedSourceFiles, changedUnprotectedTestSurface, toSnapshotInputs } from "./protect";
 import { protectedRoleFor } from "./test-surface";
-import type { CliOptions, CommandProof, CommandReceipt, Cycle, InspectionWarning, Manifest, ProtectedFile } from "./types";
+import type { CliOptions, CommandProof, CommandReceipt, Cycle, InspectionWarning, Manifest, ProtectedFile, ReplaySourceFile } from "./types";
 
 export function initCommand(options: CliOptions): string {
   const root = resolveRoot(options.root);
@@ -66,7 +66,7 @@ export function redCommand(options: CliOptions): string {
     fail(
       [
         "Red must only change test-surface files before production code is edited.",
-        "Source or non-test changes detected:",
+        "Pre-existing source or non-test changes detected before Red:",
         ...sourceChanges.map((file) => `- ${file}`),
         "Use --allow-source-changes only for migrations or existing dirty worktrees you have already reviewed."
       ].join("\n")
@@ -74,7 +74,15 @@ export function redCommand(options: CliOptions): string {
   }
 
   const beforeHashes = hashProtected(root, protectedCandidates.map((candidate) => candidate.path));
+  const sourceHashesBefore = hashPathStates(root, sourceChanges);
+  const commitBeforeCommand = currentCommit(root);
+  const treeBeforeCommand = currentTree(root);
   const result = runCommandProof(root, command);
+  const commitAfterCommand = currentCommit(root);
+  const treeAfterCommand = currentTree(root);
+  if (commitAfterCommand !== commitBeforeCommand || treeAfterCommand !== treeBeforeCommand) {
+    fail("Red command changed git HEAD or tree. Red commands may only execute the selected failing test, not commit or rewrite repository state.");
+  }
   const changedAfter = changedFiles(root);
   const protectedMutation = changedProtectedHashes(root, beforeHashes);
   if (protectedMutation.length > 0) {
@@ -89,6 +97,14 @@ export function redCommand(options: CliOptions): string {
     ].join("\n"));
   }
   const sourceChangesAfter = changedSourceFiles(changedAfter, protectedPaths);
+  const sourceMutationsDuringRed = changedPathStates(root, sourceChangesAfter, sourceHashesBefore);
+  if (sourceMutationsDuringRed.length > 0 && options.allowSourceChanges) {
+    fail([
+      "Red command modified source files after Red started:",
+      ...sourceMutationsDuringRed.map((file) => `- ${file}`),
+      "--allow-source-changes only permits source changes that were already present before the Red command."
+    ].join("\n"));
+  }
   if (sourceChangesAfter.length > 0 && !options.allowSourceChanges) {
     fail(["Red command created or modified source files:", ...sourceChangesAfter.map((file) => `- ${file}`)].join("\n"));
   }
@@ -105,7 +121,14 @@ export function redCommand(options: CliOptions): string {
   const cycleId = nextCycleId(manifest);
   const snapshotInputs = toSnapshotInputs(protectedCandidates, previousProtectedHeads(manifest));
   const protectedFiles = snapshotProtectedFiles(root, cycleId, snapshotInputs);
+  const replaySourceFiles = snapshotReplaySourceFiles(root, cycleId, sourceChanges);
   const evidence = writeRedEvidence(root, cycleId, result.output, diffForPaths(root, protectedFiles.map((file) => file.path)));
+  const replayFiles = protectedFiles.map((file) => ({
+    path: file.path,
+    sha256: file.sha256,
+    snapshotPath: file.snapshotPath,
+    role: file.role ?? "root-test"
+  }));
   const cycle: Cycle = {
     id: cycleId,
     ordinal: manifest.cycles.length + 1,
@@ -132,23 +155,14 @@ export function redCommand(options: CliOptions): string {
         strategy: "overlay-snapshots-on-git-base",
         baseCommit: currentCommit(root),
         baseTree: currentTree(root),
-        files: protectedFiles.map((file) => ({
-          path: file.path,
-          sha256: file.sha256,
-          snapshotPath: file.snapshotPath,
-          role: file.role ?? "root-test"
-        })),
-        overlaySha256: sha256Text(JSON.stringify(protectedFiles.map((file) => ({
-          path: file.path,
-          sha256: file.sha256,
-          snapshotPath: file.snapshotPath,
-          role: file.role ?? "root-test"
-        })).sort((a, b) => a.path.localeCompare(b.path))))
+        files: replayFiles,
+        sourceFiles: replaySourceFiles,
+        overlaySha256: replayOverlaySha256(replayFiles, replaySourceFiles)
       },
       checks: {
         explicitTestsSatisfied: options.tests.every((test) => protectedPaths.has(normalizeRepoPath(root, test))),
         commandCoveredExplicitTests: command.testFiles.length === 0 || options.tests.every((test) => command.testFiles.includes(normalizeRepoPath(root, test))),
-        commandWasStrict: true,
+        commandWasStrict: options.strict,
         sourceCleanBeforeRed: sourceChanges.length === 0,
         sourceCleanAfterRed: sourceChangesAfter.length === 0,
         protectedUnchangedDuringCommand: protectedMutation.length === 0,
@@ -177,6 +191,7 @@ export function redCommand(options: CliOptions): string {
   return [
     `Red captured: cycle ${cycleId}`,
     ...formatProtectedSummary(cycle.red.protectedFiles),
+    ...formatAllowedSourceChanges(sourceChanges, options.allowSourceChanges),
     failure.warning ? `Warning: ${failure.warning}` : `Failure kind: ${failure.kind}`
   ].join("\n");
 }
@@ -247,6 +262,7 @@ export function reviseTestCommand(options: CliOptions): string {
 export function verifyCommand(options: CliOptions): string {
   const root = resolveRoot(options.root);
   const manifest = requireManifest(root);
+  validateVerifyReplayOptions(options);
   assertProtectedUnchanged(root, manifest);
 
   const activeCycles = manifest.cycles.filter((cycle) => !cycle.superseded);
@@ -260,8 +276,9 @@ export function verifyCommand(options: CliOptions): string {
     }
   }
 
+  let replayResult: ReplayRunResult | null = null;
   if (options.ci && options.replay) {
-    verifyReplay(root, manifest);
+    replayResult = verifyReplay(root, manifest, options);
   }
 
   if (options.cmdArgv) {
@@ -278,8 +295,20 @@ export function verifyCommand(options: CliOptions): string {
     }
   }
 
-  appendEvent(root, manifest, "verify", { ci: options.ci, replay: options.replay, command: options.cmdArgv?.join(" ") ?? null });
-  return options.ci ? "RGR CI verification passed." : "RGR verification passed.";
+  appendEvent(root, manifest, "verify", {
+    ci: options.ci,
+    replay: options.replay,
+    command: options.cmdArgv?.join(" ") ?? null,
+    replaySelector: replayResult?.selector ?? null,
+    replayedCycleIds: replayResult?.replayedCycleIds ?? null,
+    skippedActiveCycleIds: replayResult?.skippedActiveCycleIds ?? null
+  });
+  const lines = [options.ci ? "RGR CI verification passed." : "RGR verification passed."];
+  if (replayResult && (options.cycle || options.fromCycle)) {
+    lines.push(`Replay scope: cycles ${formatPathList(replayResult.replayedCycleIds)}`);
+    lines.push(`Skipped active replay cycles: ${formatPathList(replayResult.skippedActiveCycleIds)}`);
+  }
+  return lines.join("\n");
 }
 
 export function statusCommand(options: CliOptions): string {
@@ -287,6 +316,8 @@ export function statusCommand(options: CliOptions): string {
   const manifest = requireManifest(root);
   const activeCycles = manifest.cycles.filter((cycle) => !cycle.superseded);
   const open = activeCycles.filter((cycle) => !cycle.green);
+  const completed = activeCycles.filter((cycle) => Boolean(cycle.green));
+  const superseded = manifest.cycles.filter((cycle) => cycle.superseded);
   const verified = verifyProtectedHeads(root, manifest);
 
   if (options.json) {
@@ -294,8 +325,18 @@ export function statusCommand(options: CliOptions): string {
       {
         goalId: manifest.goalId,
         baseCommit: manifest.baseCommit,
-        cycles: manifest.cycles.length,
-        activeCycles: activeCycles.length,
+        cycleCounts: {
+          total: manifest.cycles.length,
+          active: activeCycles.length,
+          completed: completed.length,
+          open: open.length,
+          superseded: superseded.length
+        },
+        activeCycles: activeCycles.map((cycle) => ({
+          id: cycle.id,
+          status: cycle.status,
+          completed: Boolean(cycle.green)
+        })),
         openCycles: open.map((cycle) => cycle.id),
         protectedFilesOk: verified.ok,
         mismatches: verified.mismatches
@@ -308,7 +349,7 @@ export function statusCommand(options: CliOptions): string {
   return [
     `Goal: ${manifest.goalId}`,
     `Base commit: ${manifest.baseCommit ?? "none"}`,
-    `Cycles: ${manifest.cycles.length} total, ${activeCycles.length} active`,
+    `Cycles: ${manifest.cycles.length} total, ${completed.length} active completed, ${open.length} open, ${superseded.length} superseded`,
     `Open Red cycles: ${open.length === 0 ? "none" : open.map((cycle) => cycle.id).join(", ")}`,
     `Protected heads: ${verified.ok ? "unchanged" : "changed"}`
   ].join("\n");
@@ -412,6 +453,9 @@ export function promptCommand(): string {
 
 function selectOpenCycle(manifest: Manifest, cycleId?: string): Cycle {
   if (cycleId) {
+    if (cycleId === "latest") {
+      fail("--cycle latest is only valid with verify --replay. Omit --cycle to use the open Red cycle.");
+    }
     const cycle = manifest.cycles.find((candidate) => candidate.id === cycleId && !candidate.superseded);
     if (!cycle) {
       fail(`No active cycle found with id ${cycleId}.`);
@@ -462,6 +506,13 @@ function formatProtectedSummary(files: ProtectedFile[]): string[] {
   ];
 }
 
+function formatAllowedSourceChanges(files: string[], allowed: boolean): string[] {
+  if (!allowed || files.length === 0) {
+    return [];
+  }
+  return [`Allowed pre-existing source changes: ${formatPathList(files)}`];
+}
+
 function protectedRoleForManifest(file: ProtectedFile): NonNullable<ProtectedFile["role"]> {
   return protectedRoleFor(file.path) ?? file.role ?? "root-test";
 }
@@ -498,6 +549,18 @@ function runPassingReceipt(root: string, cycleId: string, label: string, command
   return receipt;
 }
 
+function validateVerifyReplayOptions(options: CliOptions): void {
+  if (options.cycle && options.fromCycle) {
+    fail("Use either --cycle or --from-cycle for replay selection, not both.");
+  }
+  if ((options.cycle || options.fromCycle) && !options.replay) {
+    fail("--cycle and --from-cycle are only valid with verify --replay.");
+  }
+  if (options.replay && !options.ci) {
+    fail("--replay requires --ci.");
+  }
+}
+
 function hashProtected(root: string, paths: string[]): Map<string, string> {
   const hashes = new Map<string, string>();
   for (const repoPath of paths) {
@@ -508,6 +571,57 @@ function hashProtected(root: string, paths: string[]): Map<string, string> {
     hashes.set(repoPath, sha256File(absolute));
   }
   return hashes;
+}
+
+function snapshotReplaySourceFiles(root: string, cycleId: string, files: string[]): ReplaySourceFile[] {
+  const sourceFiles: ReplaySourceFile[] = [];
+  for (const file of files) {
+    const absolute = repoAbsolute(root, file);
+    if (!existsSync(absolute)) {
+      fail(`Cannot replay deleted source change yet: ${file}`);
+    }
+    const snapshotPath = `.rgr/snapshots/${cycleId}/source/${file}`;
+    const snapshotAbsolute = path.join(root, snapshotPath);
+    mkdirSync(path.dirname(snapshotAbsolute), { recursive: true });
+    copyFileSync(absolute, snapshotAbsolute);
+    sourceFiles.push({
+      path: file,
+      sha256: sha256File(absolute),
+      snapshotPath
+    });
+  }
+  return sourceFiles.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+function replayOverlaySha256(files: Array<{ path: string; sha256: string; snapshotPath: string; role: string }>, sourceFiles: ReplaySourceFile[]): string {
+  return sha256Text(JSON.stringify({
+    protectedFiles: files.slice().sort((a, b) => a.path.localeCompare(b.path)),
+    sourceFiles: sourceFiles.slice().sort((a, b) => a.path.localeCompare(b.path))
+  }));
+}
+
+function hashPathStates(root: string, paths: string[]): Map<string, string | null> {
+  const states = new Map<string, string | null>();
+  for (const repoPath of paths) {
+    const absolute = repoAbsolute(root, repoPath);
+    states.set(repoPath, existsSync(absolute) ? sha256File(absolute) : null);
+  }
+  return states;
+}
+
+function changedPathStates(root: string, afterPaths: string[], before: Map<string, string | null>): string[] {
+  const paths = new Set([...before.keys(), ...afterPaths]);
+  const changed: string[] = [];
+
+  for (const repoPath of paths) {
+    const absolute = repoAbsolute(root, repoPath);
+    const actual = existsSync(absolute) ? sha256File(absolute) : null;
+    if (before.get(repoPath) !== actual) {
+      changed.push(repoPath);
+    }
+  }
+
+  return changed.sort();
 }
 
 function changedProtectedHashes(root: string, before: Map<string, string>): string[] {
@@ -526,8 +640,16 @@ function changedProtectedHashes(root: string, before: Map<string, string>): stri
   return changed;
 }
 
-function verifyReplay(root: string, manifest: Manifest): void {
-  const active = manifest.cycles.filter((cycle) => !cycle.superseded);
+interface ReplayRunResult {
+  selector: Record<string, string | boolean>;
+  replayedCycleIds: string[];
+  skippedActiveCycleIds: string[];
+}
+
+function verifyReplay(root: string, manifest: Manifest, options: CliOptions): ReplayRunResult {
+  const allActive = manifest.cycles.filter((cycle) => !cycle.superseded);
+  const active = selectReplayCycles(manifest, options);
+  const replayed = new Set(active.map((cycle) => cycle.id));
   for (const cycle of active) {
     const redCommand = cycle.red.command;
     if (!cycle.green) {
@@ -541,6 +663,12 @@ function verifyReplay(root: string, manifest: Manifest): void {
     const replayRoot = mkdtempSync(path.join(tmpdir(), `rgr-replay-${cycle.id}-`));
     try {
       materializeCommit(root, replay.baseCommit, replayRoot);
+      for (const file of replay.sourceFiles ?? []) {
+        const snapshot = repoAbsolute(root, file.snapshotPath);
+        const destination = path.join(replayRoot, file.path);
+        mkdirSync(path.dirname(destination), { recursive: true });
+        copyFileSync(snapshot, destination);
+      }
       for (const file of replay.files) {
         const snapshot = repoAbsolute(root, file.snapshotPath);
         const destination = path.join(replayRoot, file.path);
@@ -567,6 +695,50 @@ function verifyReplay(root: string, manifest: Manifest): void {
       fail(`Replay failed: final Green command failed for cycle ${cycle.id}.`);
     }
   }
+  return {
+    selector: replaySelectorFor(options),
+    replayedCycleIds: active.map((cycle) => cycle.id),
+    skippedActiveCycleIds: allActive.filter((cycle) => !replayed.has(cycle.id)).map((cycle) => cycle.id)
+  };
+}
+
+function selectReplayCycles(manifest: Manifest, options: CliOptions): Cycle[] {
+  const active = manifest.cycles.filter((cycle) => !cycle.superseded);
+  if (options.cycle) {
+    if (options.cycle === "latest") {
+      const latest = active.findLast(() => true);
+      if (!latest) {
+        fail("No active cycle found for replay.");
+      }
+      return [latest];
+    }
+
+    const cycle = active.find((candidate) => candidate.id === options.cycle);
+    if (!cycle) {
+      fail(`No active cycle found with id ${options.cycle}.`);
+    }
+    return [cycle];
+  }
+
+  if (options.fromCycle) {
+    const startIndex = active.findIndex((cycle) => cycle.id === options.fromCycle);
+    if (startIndex === -1) {
+      fail(`No active cycle found with id ${options.fromCycle}.`);
+    }
+    return active.slice(startIndex);
+  }
+
+  return active;
+}
+
+function replaySelectorFor(options: CliOptions): Record<string, string | boolean> {
+  if (options.cycle) {
+    return { cycle: options.cycle };
+  }
+  if (options.fromCycle) {
+    return { fromCycle: options.fromCycle };
+  }
+  return { all: true };
 }
 
 function inspectFiles(root: string, files: string[]): InspectionWarning[] {

@@ -29,7 +29,7 @@ const DEFAULT_OPTIONS: CliOptions = {
   help: false
 };
 
-const VALUE_OPTIONS = new Set(["--root", "--goal-id", "--ledger", "--cycle", "--reason", "--test", "--protect"]);
+const VALUE_OPTIONS = new Set(["--root", "--goal-id", "--ledger", "--cycle", "--from-cycle", "--reason", "--test", "--protect"]);
 
 export function parseCli(argv: string[]): ParsedCli {
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
@@ -113,6 +113,10 @@ export function parseCli(argv: string[]): ParsedCli {
       options.cycle = takeValue(optionArgs, ++index, "--cycle");
       continue;
     }
+    if (arg === "--from-cycle") {
+      options.fromCycle = takeValue(optionArgs, ++index, "--from-cycle");
+      continue;
+    }
     if (arg === "--reason") {
       options.reason = takeValue(optionArgs, ++index, "--reason");
       continue;
@@ -142,7 +146,7 @@ export function helpText(): string {
     "  rgr green",
     "  rgr refactor -- bun test",
     "  rgr revise-test --reason \"<why the old Red was wrong>\"",
-    "  rgr verify [--ci] [--replay] -- bun test",
+    "  rgr verify [--ci] [--replay] [--cycle <id|latest>] [--from-cycle <id>] -- bun test",
     "  rgr status [--json]",
     "  rgr doctor",
     "  rgr inspect-test [--cycle <id>] [--json]",
@@ -155,7 +159,9 @@ export function helpText(): string {
     "  --protect <path>            Explicit helper/fixture/snapshot/config support to protect",
     "  --strict                    Require explicit test selection and cleaner Red failures",
     "  --replay                    Replay Red receipts during verify --ci",
-    "  --allow-source-changes      Override Red source-change rejection",
+    "  --cycle <id|latest>         During verify --replay, replay one active cycle",
+    "  --from-cycle <id>           During verify --replay, replay active cycles from this id onward",
+    "  --allow-source-changes      Permit reviewed pre-existing source changes and snapshot them for replay",
     "  --allow-no-tests            Override Red protected-test requirement",
     "  --strict-failure            Fail Red when output looks like setup noise",
     "  --ci                        Require completed cycles during verify",
