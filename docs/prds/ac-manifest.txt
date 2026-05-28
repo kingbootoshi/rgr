@@ -1,0 +1,12 @@
+# <OPS>      <glob>
+ADD          src/core/intent.ts
+ADD          src/core/scope-audit.ts
+ADD          src/core/glob.ts
+ADD          src/core/stable-json.ts
+MODIFY       src/core/types.ts
+MODIFY       src/core/commands.ts
+MODIFY       src/core/git.ts
+MODIFY       src/cli/**
+ADD|MODIFY   tests/**
+MODIFY       package.json
+ADD          docs/prds/**

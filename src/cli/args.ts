@@ -5,6 +5,7 @@ const COMMANDS = new Set<CommandName>([
   "init",
   "red",
   "green",
+  "lock-intent",
   "refactor",
   "revise-test",
   "verify",
@@ -29,7 +30,19 @@ const DEFAULT_OPTIONS: CliOptions = {
   help: false
 };
 
-const VALUE_OPTIONS = new Set(["--root", "--goal-id", "--ledger", "--cycle", "--from-cycle", "--reason", "--test", "--protect"]);
+const VALUE_OPTIONS = new Set([
+  "--root",
+  "--goal-id",
+  "--ledger",
+  "--cycle",
+  "--from-cycle",
+  "--reason",
+  "--test",
+  "--protect",
+  "--intent-lock",
+  "--expect-sha256",
+  "--expect-intent-sha256"
+]);
 
 export function parseCli(argv: string[]): ParsedCli {
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
@@ -121,6 +134,18 @@ export function parseCli(argv: string[]): ParsedCli {
       options.reason = takeValue(optionArgs, ++index, "--reason");
       continue;
     }
+    if (arg === "--intent-lock") {
+      options.intentLock = takeValue(optionArgs, ++index, "--intent-lock");
+      continue;
+    }
+    if (arg === "--expect-sha256") {
+      options.expectSha256 = takeValue(optionArgs, ++index, "--expect-sha256");
+      continue;
+    }
+    if (arg === "--expect-intent-sha256") {
+      options.expectIntentSha256 = takeValue(optionArgs, ++index, "--expect-intent-sha256");
+      continue;
+    }
     if (arg === "--test") {
       options.tests.push(takeValue(optionArgs, ++index, arg));
       continue;
@@ -144,9 +169,10 @@ export function helpText(): string {
     "  rgr init --goal-id <goal> [--root <repo>] [--ledger <events.jsonl>]",
     "  rgr red --goal-id <goal> --test <root-test> [--protect <support-file>] -- bun test <root-test>",
     "  rgr green",
+    "  rgr lock-intent --intent-lock <path> --expect-sha256 <sha256>",
     "  rgr refactor -- bun test",
     "  rgr revise-test --reason \"<why the old Red was wrong>\"",
-    "  rgr verify [--ci] [--replay] [--cycle <id|latest>] [--from-cycle <id>] -- bun test",
+    "  rgr verify [--ci] [--replay] [--intent-lock <path> --expect-intent-sha256 <sha256>] -- bun test",
     "  rgr status [--json]",
     "  rgr doctor",
     "  rgr inspect-test [--cycle <id>] [--json]",
@@ -164,6 +190,9 @@ export function helpText(): string {
     "  --allow-source-changes      Permit reviewed pre-existing source changes and snapshot them for replay",
     "  --allow-no-tests            Override Red protected-test requirement",
     "  --strict-failure            Fail Red when output looks like setup noise",
+    "  --intent-lock <path>        Trusted external IntentLock path for lock-intent or verify",
+    "  --expect-sha256 <sha256>    Expected IntentLock payload hash for lock-intent",
+    "  --expect-intent-sha256 <sha256> Expected IntentLock payload hash for verify",
     "  --ci                        Require completed cycles during verify",
     "",
     "Shortcut:",

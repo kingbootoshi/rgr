@@ -5,8 +5,9 @@ import path from "node:path";
 import { classifyFailure } from "./classify";
 import { buildCommandProof, commandDisplay, runCommandProof } from "./command-proof";
 import { fail } from "./errors";
-import { changedFiles, currentCommit, currentTree, diffForPaths, materializeCommit, requireGitRepo } from "./git";
+import { changedFiles, currentCommit, currentTree, diffForPaths, diffNameStatus, isAncestor, materializeCommit, requireGitRepo, scopeAuditDirtyFiles } from "./git";
 import { sha256File, sha256Text } from "./hash";
+import { loadTrustedIntentLock } from "./intent";
 import {
   activeRedCycle,
   appendEvent,
@@ -24,13 +25,35 @@ import {
 import { ensureRgrDirs, normalizeRepoPath, repoAbsolute, resolveRoot } from "./paths";
 import { runBinary } from "./process";
 import { collectProtectedScope, changedSourceFiles, changedUnprotectedTestSurface, toSnapshotInputs } from "./protect";
+import { assertScopeAuditPass, auditScope } from "./scope-audit";
 import { protectedRoleFor } from "./test-surface";
-import type { CliOptions, CommandProof, CommandReceipt, Cycle, InspectionWarning, Manifest, ProtectedFile, ReplaySourceFile } from "./types";
+import type { CliOptions, CommandProof, CommandReceipt, Cycle, InspectionWarning, Manifest, ProtectedFile, ReplaySourceFile, ScopeAuditReceipt } from "./types";
 
 export function initCommand(options: CliOptions): string {
   const root = resolveRoot(options.root);
   ensureManifest(root, options.goalId, options.ledger);
   return `RGR initialized at ${root}`;
+}
+
+export function lockIntentCommand(options: CliOptions): string {
+  const root = resolveRoot(options.root);
+  if (!options.intentLock) {
+    fail("lock-intent requires --intent-lock <path>.");
+  }
+  if (!options.expectSha256) {
+    fail("lock-intent requires --expect-sha256 <sha256>.");
+  }
+
+  const trusted = loadTrustedIntentLock(root, options.intentLock, options.expectSha256);
+  ensureRgrDirs(root);
+  copyFileSync(trusted.sourcePath, path.join(root, ".rgr/evidence/intent-lock.json"));
+  writeFileSync(path.join(root, ".rgr/evidence/intent-lock.receipt.json"), `${JSON.stringify({
+    payloadSha256: trusted.payloadSha256,
+    evidencePath: ".rgr/evidence/intent-lock.json",
+    capturedAt: new Date().toISOString()
+  }, null, 2)}\n`);
+
+  return `Intent lock captured as evidence: .rgr/evidence/intent-lock.json`;
 }
 
 export function redCommand(options: CliOptions): string {
@@ -281,6 +304,10 @@ export function verifyCommand(options: CliOptions): string {
     replayResult = verifyReplay(root, manifest, options);
   }
 
+  if (options.intentLock) {
+    assertScopeAuditWorkingTreeClean(root);
+  }
+
   if (options.cmdArgv) {
     const command = buildCommandProof(root, options, "verify");
     const result = runCommandProof(root, command);
@@ -295,15 +322,29 @@ export function verifyCommand(options: CliOptions): string {
     }
   }
 
-  appendEvent(root, manifest, "verify", {
+  const scopeAuditReceipt = options.intentLock ? verifyIntentScope(root, options) : null;
+  const verifyEvent: Record<string, unknown> = {
     ci: options.ci,
     replay: options.replay,
     command: options.cmdArgv?.join(" ") ?? null,
     replaySelector: replayResult?.selector ?? null,
     replayedCycleIds: replayResult?.replayedCycleIds ?? null,
     skippedActiveCycleIds: replayResult?.skippedActiveCycleIds ?? null
-  });
+  };
+  if (scopeAuditReceipt) {
+    verifyEvent.scopeAudit = {
+      lockedBase: scopeAuditReceipt.lockedBase,
+      head: scopeAuditReceipt.head,
+      checkedChanges: scopeAuditReceipt.checkedChanges.length,
+      ignoredChanges: scopeAuditReceipt.ignoredChanges.length
+    };
+  }
+
+  appendEvent(root, manifest, "verify", verifyEvent);
   const lines = [options.ci ? "RGR CI verification passed." : "RGR verification passed."];
+  if (scopeAuditReceipt) {
+    lines.push("Scope audit passed.");
+  }
   if (replayResult && (options.cycle || options.fromCycle)) {
     lines.push(`Replay scope: cycles ${formatPathList(replayResult.replayedCycleIds)}`);
     lines.push(`Skipped active replay cycles: ${formatPathList(replayResult.skippedActiveCycleIds)}`);
@@ -559,6 +600,46 @@ function validateVerifyReplayOptions(options: CliOptions): void {
   if (options.replay && !options.ci) {
     fail("--replay requires --ci.");
   }
+  if (options.intentLock && !options.expectIntentSha256) {
+    fail("verify with --intent-lock requires --expect-intent-sha256 <sha256>.");
+  }
+  if (options.expectIntentSha256 && !options.intentLock) {
+    fail("--expect-intent-sha256 requires --intent-lock.");
+  }
+}
+
+function verifyIntentScope(root: string, options: CliOptions): ScopeAuditReceipt {
+  assertScopeAuditWorkingTreeClean(root);
+  const trusted = loadTrustedIntentLock(root, options.intentLock!, options.expectIntentSha256!);
+  const head = currentCommit(root);
+  if (!head) {
+    fail("Cannot run scope audit without a git HEAD.");
+  }
+  if (!isAncestor(root, trusted.lock.lockedBase, head)) {
+    fail(`lockedBase is not an ancestor of HEAD: ${trusted.lock.lockedBase}`);
+  }
+
+  const receipt = auditScope(
+    trusted.lock.lockedBase,
+    head,
+    trusted.lock.authorizedChanges,
+    diffNameStatus(root, trusted.lock.lockedBase, head)
+  );
+  assertScopeAuditPass(receipt);
+  return receipt;
+}
+
+function assertScopeAuditWorkingTreeClean(root: string): void {
+  const dirty = scopeAuditDirtyFiles(root);
+  if (dirty.length === 0) {
+    return;
+  }
+
+  fail([
+    "Scope audit requires a clean working tree because it authorizes committed HEAD history.",
+    "Commit, revert, or remove these uncommitted changes before verify --intent-lock:",
+    ...dirty.map((file) => `- ${file}`)
+  ].join("\n"));
 }
 
 function hashProtected(root: string, paths: string[]): Map<string, string> {

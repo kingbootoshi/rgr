@@ -2,6 +2,7 @@ export type CommandName =
   | "init"
   | "red"
   | "green"
+  | "lock-intent"
   | "refactor"
   | "revise-test"
   | "verify"
@@ -19,6 +20,9 @@ export interface CliOptions {
   cycle?: string;
   fromCycle?: string;
   reason?: string;
+  intentLock?: string;
+  expectSha256?: string;
+  expectIntentSha256?: string;
   tests: string[];
   protects: string[];
   json: boolean;
@@ -35,6 +39,68 @@ export interface CliOptions {
 export interface ParsedCli {
   command: CommandName;
   options: CliOptions;
+}
+
+export type ScopeOperation = "ADD" | "MODIFY" | "DELETE";
+
+export interface IntentLock {
+  version: 1;
+  lockedBase: string;
+  authorizedChanges: AuthorizedChangeRow[];
+  proofs?: ProofRow[];
+  payloadSha256?: string;
+  signature?: IntentLockSignature;
+}
+
+export interface AuthorizedChangeRow {
+  id: string;
+  path: string;
+  ops: ScopeOperation[];
+  serves?: string[];
+  forbidden?: string;
+}
+
+export interface ProofRow {
+  id: string;
+  proves: string[];
+  command?: string;
+}
+
+export interface IntentLockSignature {
+  algorithm: "ed25519";
+  publicKey: string;
+  value: string;
+  encoding?: "base64" | "hex";
+}
+
+export interface TrustedIntentLock {
+  lock: IntentLock;
+  payloadSha256: string;
+  sourcePath: string;
+}
+
+export interface ScopeAuditChange {
+  path: string;
+  op: ScopeOperation;
+  status: string;
+}
+
+export interface ScopeAuditFailure extends ScopeAuditChange {
+  reason: "deny" | "unauthorized";
+  rowId?: string;
+}
+
+export interface ScopeAuditReceipt {
+  lockedBase: string;
+  head: string;
+  checkedChanges: ScopeAuditChange[];
+  ignoredChanges: string[];
+  failures: ScopeAuditFailure[];
+}
+
+export interface DiffNameStatus {
+  status: string;
+  path: string;
 }
 
 export interface Manifest {

@@ -6,6 +6,7 @@ import {
   greenCommand,
   initCommand,
   inspectTestCommand,
+  lockIntentCommand,
   promptCommand,
   redCommand,
   refactorCommand,
@@ -44,6 +45,8 @@ function dispatch(command: string, options: ReturnType<typeof parseCli>["options
       return redCommand(options);
     case "green":
       return greenCommand(options);
+    case "lock-intent":
+      return lockIntentCommand(options);
     case "refactor":
       return refactorCommand(options);
     case "revise-test":

@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { fail } from "./errors";
 import { runBinary, runBinaryBuffer } from "./process";
+import type { DiffNameStatus } from "./types";
 
 export function requireGitRepo(root: string): void {
   const result = runBinary(root, "git", ["rev-parse", "--is-inside-work-tree"]);
@@ -31,6 +32,36 @@ export function commitExists(root: string, commit: string): boolean {
   return runBinary(root, "git", ["cat-file", "-e", `${commit}^{commit}`]).exitCode === 0;
 }
 
+export function isAncestor(root: string, ancestor: string, descendant: string): boolean {
+  const result = runBinary(root, "git", ["merge-base", "--is-ancestor", ancestor, descendant]);
+  if (result.exitCode === 0) {
+    return true;
+  }
+  if (result.exitCode === 1) {
+    return false;
+  }
+  fail(`Could not check git ancestry:\n${result.output}`);
+}
+
+export function diffNameStatus(root: string, base: string, head: string): DiffNameStatus[] {
+  const result = runBinary(root, "git", ["diff", "--no-renames", "--name-status", `${base}...${head}`]);
+  if (result.exitCode !== 0) {
+    fail(`Could not read git diff name-status:\n${result.output}`);
+  }
+
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .map((line) => {
+      const [status, filePath] = line.split("\t");
+      if (!status || !filePath) {
+        fail(`Could not parse git name-status line: ${line}`);
+      }
+      return { status, path: stripGitQuotes(filePath) };
+    });
+}
+
 export function changedFiles(root: string): string[] {
   const result = runBinary(root, "git", ["status", "--porcelain=v1", "-uall"]);
   if (result.exitCode !== 0) {
@@ -49,6 +80,26 @@ export function changedFiles(root: string): string[] {
     })
     .filter((filePath) => !filePath.startsWith(".rgr/"))
     .filter((filePath) => !filePath.startsWith("node_modules/"))
+    .sort();
+}
+
+export function scopeAuditDirtyFiles(root: string): string[] {
+  const result = runBinary(root, "git", ["status", "--porcelain=v1", "-uall"]);
+  if (result.exitCode !== 0) {
+    fail(`Could not read git status:\n${result.output}`);
+  }
+
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .map((line) => {
+      const rawPath = line.slice(3);
+      const renameMarker = " -> ";
+      const filePath = rawPath.includes(renameMarker) ? rawPath.split(renameMarker).at(-1) ?? rawPath : rawPath;
+      return stripGitQuotes(filePath);
+    })
+    .filter((filePath) => !filePath.startsWith(".rgr/"))
     .sort();
 }
 
