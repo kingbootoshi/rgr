@@ -1,0 +1,8 @@
+interface:
+  display_name: "Intent Contract"
+  short_description: "Lock intent before planning so agents cannot redefine the goal"
+  brand_color: "#7C3AED"
+  default_prompt: "Use $intent-contract to turn this request into a signed Locked Intent Boundary before planning."
+
+policy:
+  allow_implicit_invocation: true

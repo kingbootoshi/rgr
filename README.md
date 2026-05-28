@@ -37,7 +37,12 @@ The workflow examples below assume `rgr` is on your PATH. If it is not, replace 
 
 ## Agent Plugins
 
-RGR ships one shared skill as both a Claude Code plugin and a Codex plugin.
+RGR ships **two** skills as both Claude Code and Codex plugins, the two halves of trustless engineering:
+
+- **`rgr`** — proves behavior and scope at one CI verdict (this tool).
+- **`intent-contract`** — turns a request into a signed Locked Intent Boundary before any planning, so an agent cannot redefine the goal. It compiles to an IntentLock that `rgr verify --intent-lock` enforces. See [`skills/intent-contract/SKILL.md`](skills/intent-contract/SKILL.md).
+
+Together: intent-contract writes the law, rgr is the court that proves the work stayed inside it. See [Trustless Enforcement](#trustless-enforcement-intent-contract--rgr).
 
 Claude Code:
 
@@ -58,7 +63,19 @@ Codex:
 - Shared skill: `skills/rgr/SKILL.md`
 - Codex UI metadata: `skills/rgr/agents/openai.yaml`
 
-Install the repo root as the plugin directory in Codex, then invoke `$rgr` when a code change should use strict Red-Green-Refactor proof.
+Install the repo root as the plugin directory in Codex, then invoke `$rgr` when a code change should use strict Red-Green-Refactor proof. The bundled `intent-contract` skill is discovered the same way (`skills/intent-contract/`).
+
+## Trustless Enforcement (intent-contract + rgr)
+
+The endgame: accept an agent's work without trusting the agent, because a gate it cannot bribe has already proven the work stayed inside the human's intent and functions.
+
+1. **Lock intent.** `intent-contract` produces a small, human-signed Locked Intent Boundary: required deltas, invariants, non-substitutions, and authorized-change rights (every diff op must map to a row). It compiles to a hash-pinned **IntentLock**.
+2. **Freeze it.** `rgr lock-intent --intent-lock <path> --expect-sha256 <H>` verifies the lock's payload hash and stores a copy under `.rgr/` as evidence.
+3. **Enforce one verdict.** `rgr verify --ci --replay --intent-lock <trusted> --expect-intent-sha256 <H>` proves behavior (Red-Green-Replay) **and** scope (every `git diff --no-renames --name-status <lockedBase>...HEAD` op maps to an authorized row) in a single pass.
+
+The load-bearing property: **`.rgr/` is evidence, not authority.** CI reads the trusted lock from a path the agent does not control, hash/signature-verifies it, and audits the real diff against that. Tampering the in-tree copy changes nothing. A non-ancestor base or a dirty working tree fails closed. Deny rows (`ops: []`) fail on contact.
+
+A signed boundary lives at `docs/prds/intent-lock-scope-audit.intent-boundary.md` — this feature was built under its own boundary and self-audited.
 
 ## Core Workflow
 
